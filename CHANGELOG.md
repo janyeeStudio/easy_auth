@@ -1,3 +1,12 @@
+## Unreleased
+
+* fix(apple-web): 稳定 Apple WebView 登录兜底链路
+  - WebView 登录 URL 会带上 `tenant_id`,避免 anylogin 回落默认租户导致 client_id mismatch
+  - 同时识别 `https://auth.janyee.com/apple/callback` 与 legacy `https://api.janyee.com/user/apple/callback`
+  - Windows WebView2 初始化完成前显示准备状态,并使用独立 user data 目录
+  - macOS / iOS WebView fallback 使用 Safari UA,避免 Apple 登录页拒绝桌面 Chrome UA
+  - 主动轮询当前 URL 作为导航回调兜底,确保拿到 `callbackUrl` 后交给 `/login/directLogin`
+
 ## 0.0.2
 
 * fix(oauth): 适配 userLogin OIDC profile claims 字段重命名

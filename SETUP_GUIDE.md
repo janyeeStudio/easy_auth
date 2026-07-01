@@ -285,6 +285,39 @@ try {
 - Android **不支持** Apple ID 原生登录,SDK 会自动走 WebView 路径
 - WebView 用浏览器 cookie,可能要求用户输 Apple ID + 密码 + 二次验证
 
+#### 5.7 WebView 回调链路与服务端要求
+
+非 Apple 平台以及 iOS / macOS 原生能力不可用时,SDK 会使用 WebView 兜底:
+
+1. 打开 `GET <baseUrl>/login/apple?tenant_id=<tenantId>`
+2. anylogin 跳转到 Apple 授权页
+3. Apple 回调到 `https://auth.janyee.com/apple/callback?...`
+4. SDK 在 WebView 中截获完整回调 URL,形成 `callbackUrl`
+5. SDK 调 `POST <baseUrl>/login/directLogin`,传:
+
+```json
+{
+  "tenant_id": "<tenantId>",
+  "scene_id": "<sceneId>",
+  "channel_id": "apple",
+  "channel_data": {
+    "callback_url": "https://auth.janyee.com/apple/callback?code=...&state=...",
+    "platform": "web"
+  }
+}
+```
+
+anylogin 当前租户必须配置这些 Apple 参数:
+- `apple_web_client_id`: Apple Service ID,例如 `com.example.app-web`
+- `apple_team_id`
+- `apple_key_id`
+- `apple_private_key_encrypted`: 使用 anylogin 配置的加密口令加密后的 Apple 私钥
+
+排错:
+- `invalid_client`: Apple 不接受 anylogin 生成的 client_secret,通常是 `apple_web_client_id` / `team_id` / `key_id` / 私钥不匹配。
+- `invalid_grant`: client_secret 已被 Apple 接受,但 `code` 过期、已用过或不是本次 redirect_uri 产生的。重新发起 Apple 登录即可。
+- WebView 一直加载:检查 SDK 日志里的 callback URL 是否被截获;新版会同时识别 `auth.janyee.com/apple/callback` 和 legacy `api.janyee.com/user/apple/callback`。
+
 ### 6. 短信验证码登录
 
 #### 完整流程
@@ -727,5 +760,4 @@ if (Platform.isIOS) {
 
 **最后更新**: 2025-10-14  
 **适用版本**: v0.0.1+
-
 

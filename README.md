@@ -167,7 +167,8 @@ try {
 
 ```dart
 try {
-  final result = await EasyAuth().loginWithApple();
+  // 传入 context 后,Android / Windows / Linux 等非 Apple 平台会自动走 WebView 兜底。
+  final result = await EasyAuth().loginWithApple(context);
   if (result.isSuccess) {
     print('Apple登录成功！');
   }
@@ -278,6 +279,16 @@ await EasyAuth().logout();
 
 在Xcode中启用`Sign in with Apple` Capability。
 
+运行时分发:
+- iOS / macOS 优先使用系统原生 Sign in with Apple。
+- Android / Windows / Linux 会使用 WebView 登录。
+- 如果 iOS / macOS entitlement 或 provisioning profile 配置不完整,SDK 会记录 `🍎 [native-apple]` 日志并回落 WebView。
+
+WebView 兜底链路会打开 anylogin 的 `/login/apple?tenant_id=<tenantId>`。SDK 会截获
+`https://auth.janyee.com/apple/callback` 回调 URL,再把完整 `callbackUrl` 提交给
+`/login/directLogin`。因此 anylogin 端必须为当前租户配置正确的 `apple_web_client_id`,
+`apple_team_id`, `apple_key_id`, `apple_private_key_encrypted`。
+
 ### Google登录配置
 
 请参考 [Google Sign-In for Flutter](https://pub.dev/packages/google_sign_in) 文档配置。
@@ -288,7 +299,7 @@ await EasyAuth().logout();
 
 ## 🔗 相关项目
 
-- [anylogin](https://github.com/your-org/anylogin) - 配套的后端登录服务
+- [anylogin](https://github.com/kmlixh/anylogin) - 配套的后端登录服务
 
 ## 🤝 贡献
 
