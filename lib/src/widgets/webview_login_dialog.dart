@@ -25,9 +25,14 @@ class WebViewLoginDialog extends StatefulWidget {
 
 class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
   bool _isLoading = true;
+  bool _preparingWebView = Platform.isWindows;
   bool _completed = false; // 防止重复调用onResult
   InAppWebViewController? _ctrl;
+  WebViewEnvironment? _webViewEnvironment;
+  Object? _webViewEnvironmentError;
   Timer? _urlPoll;
+  Timer? _loadingWatchdog;
+  int _progress = 0;
 
   /// 诊断:记录每次回调命中 + URL,显示在 dialog 底部。截图给开发者定位问题。
   final List<String> _diag = [];
@@ -46,12 +51,56 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
   @override
   void initState() {
     super.initState();
+    _prepareWebViewEnvironment();
   }
 
   @override
   void dispose() {
     _urlPoll?.cancel();
+    _loadingWatchdog?.cancel();
+    unawaited(_webViewEnvironment?.dispose() ?? Future<void>.value());
     super.dispose();
+  }
+
+  Future<void> _prepareWebViewEnvironment() async {
+    if (!Platform.isWindows) {
+      if (mounted) {
+        setState(() {
+          _preparingWebView = false;
+        });
+      }
+      return;
+    }
+
+    try {
+      final version = await WebViewEnvironment.getAvailableVersion();
+      if (version == null || version.isEmpty) {
+        throw StateError('未检测到 Microsoft Edge WebView2 Runtime');
+      }
+
+      final userDataFolder = [
+        Directory.systemTemp.path,
+        'easy_auth_webview2',
+      ].join(Platform.pathSeparator);
+      await Directory(userDataFolder).create(recursive: true);
+
+      _webViewEnvironment = await WebViewEnvironment.create(
+        settings: WebViewEnvironmentSettings(
+          userDataFolder: userDataFolder,
+          language: 'zh-CN',
+        ),
+      );
+      _trace('webview2Ready', version);
+    } catch (e) {
+      _webViewEnvironmentError = e;
+      _trace('webview2Error', e);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _preparingWebView = false;
+        });
+      }
+    }
   }
 
   /// 终极兜底:每 500ms 主动 poll 当前 URL。
@@ -72,7 +121,9 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
           t.cancel();
           if (!_completed) _handleCallback(url);
         }
-      } catch (_) {/* poll 出错就跳过这次 */}
+      } catch (_) {
+        /* poll 出错就跳过这次 */
+      }
     });
   }
 
@@ -105,11 +156,17 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
 
   /// 根据平台类型获取合适的User-Agent
   String _getPlatformSpecificUserAgent() {
+    final channelId = widget.channelId ?? 'google';
+    if (channelId == 'apple') {
+      if (Platform.isIOS) {
+        return 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+      }
+      return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+    }
+
     if (Platform.isAndroid) {
       return 'Mozilla/5.0 (Linux; Android 10; SM-G975F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36';
     }
-    // Apple 登录页用 JS 检测 UA,Windows Chrome UA 会被拒渲染 (白/灰屏)。
-    // macOS / iOS 必须用 Safari UA。
     if (Platform.isMacOS) {
       return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
     }
@@ -157,10 +214,7 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
   Widget build(BuildContext context) {
     // WillPopScope 兜底 Android 系统返回键,确保 onResult 一定被触发 —
     // 否则调用方的 Completer 永远 await 不到结果,出现"卡死"。
-    return WillPopScope(
-      onWillPop: _onWillPop,
-      child: _buildBody(context),
-    );
+    return WillPopScope(onWillPop: _onWillPop, child: _buildBody(context));
   }
 
   Widget _buildBody(BuildContext context) {
@@ -224,25 +278,74 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
 
   /// 构建WebView组件
   Widget _buildWebView() {
+    if (_preparingWebView) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_webViewEnvironmentError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, size: 42, color: Colors.red),
+              const SizedBox(height: 16),
+              const Text(
+                '登录组件初始化失败',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '请安装或修复 Microsoft Edge WebView2 Runtime 后重试。\n$_webViewEnvironmentError',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _onCloseButton,
+                child: const Text('关闭'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final userAgent = _getPlatformSpecificUserAgent();
     print('🔍 使用平台特定User-Agent: $userAgent');
 
     return Stack(
       children: [
         InAppWebView(
+          webViewEnvironment: _webViewEnvironment,
           onWebViewCreated: (c) {
             _ctrl = c;
             _startUrlPolling();
+            _armLoadingWatchdog();
           },
           initialUrlRequest: URLRequest(url: WebUri(widget.loginUrl)),
           initialSettings: InAppWebViewSettings(
             javaScriptEnabled: true,
+            javaScriptCanOpenWindowsAutomatically: true,
             userAgent: userAgent,
             allowsInlineMediaPlayback: true,
             mediaPlaybackRequiresUserGesture: false,
+            supportMultipleWindows: true,
             // 必须开 — 否则 shouldOverrideUrlLoading 不会回调。
             useShouldOverrideUrlLoading: true,
           ),
+          onCreateWindow: (controller, createNavigationAction) async {
+            final url = createNavigationAction.request.url?.toString();
+            _trace('onCreateWindow', url);
+            if (url != null && _matchesCallback(url) && !_completed) {
+              _handleCallback(url);
+              return false;
+            }
+            await controller.loadUrl(
+              urlRequest: createNavigationAction.request,
+            );
+            return false;
+          },
           // 跨平台最可靠的拦截点 — Android / iOS / macOS 全部触发。
           // onLoadStop 在 macOS WebView 实现上不稳定,
           // onNavigationResponse 在 macOS 上根本不调用 → 老版本卡死的根因。
@@ -256,9 +359,13 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
             return NavigationActionPolicy.ALLOW;
           },
           onLoadStart: (controller, url) {
-            setState(() {
-              _isLoading = true;
-            });
+            _armLoadingWatchdog();
+            if (mounted) {
+              setState(() {
+                _isLoading = true;
+                _progress = 0;
+              });
+            }
             _trace('onLoadStart', url);
             final s = url?.toString();
             if (s != null && _matchesCallback(s) && !_completed) {
@@ -272,10 +379,23 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
               _handleCallback(s);
             }
           },
+          onProgressChanged: (controller, progress) {
+            _progress = progress;
+            if (progress >= 80 && mounted) {
+              _clearLoadingWatchdog();
+              setState(() {
+                _isLoading = false;
+              });
+            }
+          },
           onLoadStop: (controller, url) {
-            setState(() {
-              _isLoading = false;
-            });
+            _clearLoadingWatchdog();
+            if (mounted) {
+              setState(() {
+                _isLoading = false;
+                _progress = 100;
+              });
+            }
             _trace('onLoadStop', url);
             final s = url?.toString();
             if (s != null && _matchesCallback(s) && !_completed) {
@@ -283,15 +403,53 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
             }
           },
           onReceivedError: (controller, request, error) {
-            setState(() {
-              _isLoading = false;
-            });
+            _clearLoadingWatchdog();
+            if (mounted) {
+              setState(() {
+                _isLoading = false;
+              });
+            }
+            _trace('onReceivedError', '${request.url} ${error.description}');
+          },
+          onReceivedHttpError: (controller, request, errorResponse) {
+            _trace(
+              'onReceivedHttpError',
+              '${request.url} ${errorResponse.statusCode}',
+            );
+          },
+          onConsoleMessage: (controller, consoleMessage) {
+            _trace('console', consoleMessage.message);
           },
         ),
         // 加载指示器
-        if (_isLoading) const Center(child: CircularProgressIndicator()),
+        if (_isLoading)
+          IgnorePointer(
+            child: Center(
+              child: CircularProgressIndicator(
+                value: _progress > 0 && _progress < 100
+                    ? _progress / 100
+                    : null,
+              ),
+            ),
+          ),
       ],
     );
+  }
+
+  void _armLoadingWatchdog() {
+    _loadingWatchdog?.cancel();
+    _loadingWatchdog = Timer(const Duration(seconds: 18), () {
+      if (!mounted || _completed) return;
+      setState(() {
+        _isLoading = false;
+      });
+      _trace('loadingTimeout', widget.loginUrl);
+    });
+  }
+
+  void _clearLoadingWatchdog() {
+    _loadingWatchdog?.cancel();
+    _loadingWatchdog = null;
   }
 
   void _handleCallback(String url) async {
