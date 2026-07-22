@@ -25,11 +25,8 @@ class WebViewLoginDialog extends StatefulWidget {
 
 class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
   bool _isLoading = true;
-  bool _preparingWebView = Platform.isWindows;
   bool _completed = false; // 防止重复调用onResult
   InAppWebViewController? _ctrl;
-  WebViewEnvironment? _webViewEnvironment;
-  Object? _webViewEnvironmentError;
   Timer? _urlPoll;
   Timer? _loadingWatchdog;
   int _progress = 0;
@@ -51,56 +48,17 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
   @override
   void initState() {
     super.initState();
-    _prepareWebViewEnvironment();
+    // Start before the native WebView exists. WebView2 creation itself can
+    // fail or stall when the runtime is missing; waiting for onWebViewCreated
+    // alone would leave the dialog's loading indicator running forever.
+    _armLoadingWatchdog();
   }
 
   @override
   void dispose() {
     _urlPoll?.cancel();
     _loadingWatchdog?.cancel();
-    unawaited(_webViewEnvironment?.dispose() ?? Future<void>.value());
     super.dispose();
-  }
-
-  Future<void> _prepareWebViewEnvironment() async {
-    if (!Platform.isWindows) {
-      if (mounted) {
-        setState(() {
-          _preparingWebView = false;
-        });
-      }
-      return;
-    }
-
-    try {
-      final version = await WebViewEnvironment.getAvailableVersion();
-      if (version == null || version.isEmpty) {
-        throw StateError('未检测到 Microsoft Edge WebView2 Runtime');
-      }
-
-      final userDataFolder = [
-        Directory.systemTemp.path,
-        'easy_auth_webview2',
-      ].join(Platform.pathSeparator);
-      await Directory(userDataFolder).create(recursive: true);
-
-      _webViewEnvironment = await WebViewEnvironment.create(
-        settings: WebViewEnvironmentSettings(
-          userDataFolder: userDataFolder,
-          language: 'zh-CN',
-        ),
-      );
-      _trace('webview2Ready', version);
-    } catch (e) {
-      _webViewEnvironmentError = e;
-      _trace('webview2Error', e);
-    } finally {
-      if (mounted) {
-        setState(() {
-          _preparingWebView = false;
-        });
-      }
-    }
   }
 
   /// 终极兜底:每 500ms 主动 poll 当前 URL。
@@ -161,7 +119,14 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
       if (Platform.isIOS) {
         return 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
       }
-      return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+      if (Platform.isMacOS) {
+        return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+      }
+      if (Platform.isWindows) {
+        // WebView2 uses Chromium. Do not advertise Safari here: Apple may
+        // serve WebKit-specific behavior that cannot run in Edge WebView2.
+        return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0';
+      }
     }
 
     if (Platform.isAndroid) {
@@ -278,46 +243,12 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
 
   /// 构建WebView组件
   Widget _buildWebView() {
-    if (_preparingWebView) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (_webViewEnvironmentError != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 42, color: Colors.red),
-              const SizedBox(height: 16),
-              const Text(
-                '登录组件初始化失败',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '请安装或修复 Microsoft Edge WebView2 Runtime 后重试。\n$_webViewEnvironmentError',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: _onCloseButton,
-                child: const Text('关闭'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
     final userAgent = _getPlatformSpecificUserAgent();
     print('🔍 使用平台特定User-Agent: $userAgent');
 
     return Stack(
       children: [
         InAppWebView(
-          webViewEnvironment: _webViewEnvironment,
           onWebViewCreated: (c) {
             _ctrl = c;
             _startUrlPolling();

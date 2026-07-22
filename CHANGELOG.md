@@ -1,5 +1,9 @@
 ## Unreleased
 
+* fix(apple-web): avoid Windows WebView2 startup deadlock
+  - Windows now uses the plugin's default WebView2 environment instead of waiting on a custom environment before creating the page
+  - Windows Apple login uses an Edge/Chromium user agent rather than pretending to be Safari
+
 * fix(apple-web): 稳定 Apple WebView 登录兜底链路
   - WebView 登录 URL 会带上 `tenant_id`,避免 anylogin 回落默认租户导致 client_id mismatch
   - 同时识别 `https://auth.janyee.com/apple/callback` 与 legacy `https://api.janyee.com/user/apple/callback`
