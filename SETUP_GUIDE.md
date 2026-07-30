@@ -284,6 +284,7 @@ try {
 #### 5.6 Android 注意
 - Android **不支持** Apple ID 原生登录,SDK 会自动走 WebView 路径
 - WebView 用浏览器 cookie,可能要求用户输 Apple ID + 密码 + 二次验证
+- Windows 使用 Edge WebView2 的实际 User-Agent，并将 Apple 授权保持在同一页面中；如果 WebView2 加载主页面失败，登录页会显示“重试”而不是空白。
 
 #### 5.7 WebView 回调链路与服务端要求
 
@@ -760,4 +761,3 @@ if (Platform.isIOS) {
 
 **最后更新**: 2025-10-14  
 **适用版本**: v0.0.1+
-

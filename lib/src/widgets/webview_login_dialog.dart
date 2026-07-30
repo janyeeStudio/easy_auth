@@ -25,6 +25,7 @@ class WebViewLoginDialog extends StatefulWidget {
 
 class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
   bool _isLoading = true;
+  String? _mainFrameError;
   bool _completed = false; // 防止重复调用onResult
   InAppWebViewController? _ctrl;
   Timer? _urlPoll;
@@ -112,8 +113,12 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
     return false;
   }
 
-  /// 根据平台类型获取合适的User-Agent
-  String _getPlatformSpecificUserAgent() {
+  /// 根据平台类型获取合适的 User-Agent。
+  ///
+  /// WebView2 already reports its real Edge version. Overriding it with a
+  /// stale Chromium version makes Apple's login page take a different code
+  /// path from the browser that is actually rendering it.
+  String? _getPlatformSpecificUserAgent() {
     final channelId = widget.channelId ?? 'google';
     if (channelId == 'apple') {
       if (Platform.isIOS) {
@@ -123,9 +128,8 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
         return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
       }
       if (Platform.isWindows) {
-        // WebView2 uses Chromium. Do not advertise Safari here: Apple may
-        // serve WebKit-specific behavior that cannot run in Edge WebView2.
-        return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0';
+        // Let WebView2 expose its actual Edge/Chromium version.
+        return null;
       }
     }
 
@@ -137,6 +141,9 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
     }
     if (Platform.isIOS) {
       return 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+    }
+    if (Platform.isWindows) {
+      return null;
     }
     // Windows / Linux 保持 Chrome UA
     return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Safari/537.36';
@@ -244,7 +251,8 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
   /// 构建WebView组件
   Widget _buildWebView() {
     final userAgent = _getPlatformSpecificUserAgent();
-    print('🔍 使用平台特定User-Agent: $userAgent');
+    final isWindows = Platform.isWindows;
+    print('🔍 使用平台特定User-Agent: ${userAgent ?? '(WebView2 default)'}');
 
     return Stack(
       children: [
@@ -261,7 +269,11 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
             userAgent: userAgent,
             allowsInlineMediaPlayback: true,
             mediaPlaybackRequiresUserGesture: false,
-            supportMultipleWindows: true,
+            // Apple uses target=_blank/window.open in parts of its web flow.
+            // A second native WebView2 surface is not mounted by this dialog;
+            // keeping navigation in the current surface avoids an about:blank
+            // child texture being displayed as the login page.
+            supportMultipleWindows: !isWindows,
             // 必须开 — 否则 shouldOverrideUrlLoading 不会回调。
             useShouldOverrideUrlLoading: true,
           ),
@@ -270,12 +282,21 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
             _trace('onCreateWindow', url);
             if (url != null && _matchesCallback(url) && !_completed) {
               _handleCallback(url);
+              // The callback has been consumed by the Flutter layer. Tell
+              // WebView2 not to navigate to the one-time OAuth callback.
+              return true;
+            }
+            if (isWindows) {
+              // flutter_inappwebview_windows loads the requested URL in the
+              // current WebView when the client returns false. Calling
+              // controller.loadUrl here as well starts the same navigation
+              // twice and can leave Apple authorization on a blank surface.
               return false;
             }
             await controller.loadUrl(
               urlRequest: createNavigationAction.request,
             );
-            return false;
+            return true;
           },
           // 跨平台最可靠的拦截点 — Android / iOS / macOS 全部触发。
           // onLoadStop 在 macOS WebView 实现上不稳定,
@@ -295,6 +316,7 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
               setState(() {
                 _isLoading = true;
                 _progress = 0;
+                _mainFrameError = null;
               });
             }
             _trace('onLoadStart', url);
@@ -335,14 +357,23 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
           },
           onReceivedError: (controller, request, error) {
             _clearLoadingWatchdog();
-            if (mounted) {
+            if (mounted && request.isForMainFrame != false) {
               setState(() {
                 _isLoading = false;
+                _mainFrameError = error.description;
               });
             }
             _trace('onReceivedError', '${request.url} ${error.description}');
           },
           onReceivedHttpError: (controller, request, errorResponse) {
+            if (mounted &&
+                request.isForMainFrame != false &&
+                (errorResponse.statusCode ?? 0) >= 400) {
+              setState(() {
+                _isLoading = false;
+                _mainFrameError = '登录页面返回 HTTP ${errorResponse.statusCode}。';
+              });
+            }
             _trace(
               'onReceivedHttpError',
               '${request.url} ${errorResponse.statusCode}',
@@ -363,8 +394,49 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
               ),
             ),
           ),
+        if (_mainFrameError != null)
+          Positioned.fill(
+            child: ColoredBox(
+              color: Colors.white,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.cloud_off, size: 42),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Apple 登录页面加载失败',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(_mainFrameError!, textAlign: TextAlign.center),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: _retryMainFrame,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('重试'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
+  }
+
+  Future<void> _retryMainFrame() async {
+    if (!mounted) return;
+    setState(() {
+      _mainFrameError = null;
+      _isLoading = true;
+      _progress = 0;
+    });
+    _armLoadingWatchdog();
+    await _ctrl?.reload();
   }
 
   void _armLoadingWatchdog() {
@@ -373,6 +445,7 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
       if (!mounted || _completed) return;
       setState(() {
         _isLoading = false;
+        _mainFrameError = '登录页面加载超时，请检查网络后重试。';
       });
       _trace('loadingTimeout', widget.loginUrl);
     });

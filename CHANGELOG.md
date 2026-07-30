@@ -1,5 +1,10 @@
 ## Unreleased
 
+* fix(apple-web): keep Windows Apple authorization in one WebView2 surface
+  - avoid the unmounted child window path that left the login dialog blank
+  - use WebView2's real Edge user agent instead of a hard-coded browser version
+  - show a retry state when the main login document fails or times out
+
 * fix(apple-web): avoid Windows WebView2 startup deadlock
   - Windows now uses the plugin's default WebView2 environment instead of waiting on a custom environment before creating the page
   - Windows Apple login uses an Edge/Chromium user agent rather than pretending to be Safari
