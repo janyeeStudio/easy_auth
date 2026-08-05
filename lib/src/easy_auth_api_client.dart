@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'easy_auth_models.dart';
 import 'easy_auth_exception.dart';
 import 'easy_auth_api_paths.dart';
+import 'easy_auth_http_client.dart';
 
 /// EasyAuth API客户端
 /// 负责与anylogin后端服务通信
@@ -13,6 +14,7 @@ class EasyAuthApiClient {
   final String tenantId;
   final String sceneId;
   final http.Client? httpClient;
+  late final http.Client _client = httpClient ?? createEasyAuthHttpClient();
 
   EasyAuthApiClient({
     required String baseUrl,
@@ -28,8 +30,6 @@ class EasyAuthApiClient {
     }
     return s;
   }
-
-  http.Client get _client => httpClient ?? http.Client();
 
   /// 发送短信验证码
   Future<void> sendSMSCode(String phoneNumber) async {

@@ -1,5 +1,10 @@
 ## Unreleased
 
+* fix(network): honor proxy settings for desktop authentication requests
+  - reuse one HTTP client instead of creating and leaking a client per request
+  - IO platforms resolve HTTP and HTTPS proxies from the process environment
+  - Windows hosts can propagate the current user's system proxy before Flutter starts
+
 * fix(apple-web): keep Windows Apple authorization in one WebView2 surface
   - avoid the unmounted child window path that left the login dialog blank
   - use WebView2's real Edge user agent instead of a hard-coded browser version
