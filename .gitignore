@@ -31,3 +31,7 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 /build/
 /coverage/
+
+# Flutter host files generated for the local Android toolchain
+/android/local.properties
+/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
