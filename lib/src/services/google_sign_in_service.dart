@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -10,7 +11,61 @@ import '../easy_auth_models.dart';
 class GoogleSignInService {
   static final GoogleSignInService _instance = GoogleSignInService._internal();
   factory GoogleSignInService() => _instance;
-  GoogleSignInService._internal();
+  GoogleSignInService._internal() {
+    _listenToAuthEvents();
+  }
+
+  bool _initialized = false;
+  GoogleSignInAccount? _currentUser;
+  StreamSubscription<GoogleSignInAuthenticationEvent>? _authEventSubscription;
+
+  void _listenToAuthEvents() {
+    _authEventSubscription?.cancel();
+    _authEventSubscription = GoogleSignIn.instance.authenticationEvents.listen((
+      event,
+    ) {
+      switch (event) {
+        case GoogleSignInAuthenticationEventSignIn(:final user):
+          _currentUser = user;
+          print('🔔 [GoogleSignIn] 用户登录事件: ${user.email}');
+        case GoogleSignInAuthenticationEventSignOut():
+          _currentUser = null;
+          print('🔔 [GoogleSignIn] 用户登出事件');
+      }
+    });
+  }
+
+  Future<void> _ensureInitialized([TenantConfig? tenantConfig]) async {
+    if (_initialized) return;
+
+    String? clientId;
+    String? serverClientId;
+
+    if (tenantConfig != null) {
+      final googleChannel = tenantConfig.supportedChannels
+          .where((channel) => channel.channelId == 'google')
+          .firstOrNull;
+
+      if (googleChannel?.config != null) {
+        final platform = getCurrentPlatform();
+        clientId = googleChannel!.config![platform];
+        serverClientId = googleChannel.config!['web'];
+      }
+    }
+
+    if (clientId == null || clientId.isEmpty) {
+      throw Exception(
+        'Google OAuth配置缺失：未找到${getCurrentPlatform()}平台的clientId配置',
+      );
+    }
+
+    print('🔑 初始化GoogleSignIn - clientId: $clientId, serverClientId: $serverClientId');
+    await GoogleSignIn.instance.initialize(
+      clientId: clientId,
+      serverClientId: serverClientId,
+    );
+    _initialized = true;
+  }
 
   /// 执行Google登录（新版本7.2.0 API）
   /// 返回形如：{ 'idToken': String?, 'email': String?, 'displayName': String? }
@@ -41,51 +96,23 @@ class GoogleSignInService {
     TenantConfig? tenantConfig,
   ]) async {
     try {
-      // 从TenantConfig中获取Google OAuth配置
-      String? clientId;
-      String? serverClientId;
-
-      if (tenantConfig != null) {
-        final googleChannel = tenantConfig.supportedChannels
-            .where((channel) => channel.channelId == 'google')
-            .firstOrNull;
-
-        if (googleChannel?.config != null) {
-          final platform = getCurrentPlatform();
-          clientId = googleChannel!.config![platform];
-          serverClientId = googleChannel.config!['web'];
-        }
-      }
-
-      // 检查配置是否有效
-      if (clientId == null || clientId.isEmpty) {
-        throw Exception(
-          'Google OAuth配置缺失：未找到${getCurrentPlatform()}平台的clientId配置',
-        );
-      }
-
-      print('🔑 使用配置 - clientId: $clientId, serverClientId: $serverClientId');
-
-      // 使用新版本API初始化（Android需要serverClientId）
-      await GoogleSignIn.instance.initialize(
-        clientId: clientId,
-        serverClientId: serverClientId,
-      );
-
-      print('🔍 开始Google原生登录...');
+      await _ensureInitialized(tenantConfig);
 
       // 使用新版本API进行认证
       if (!GoogleSignIn.instance.supportsAuthenticate()) {
         throw Exception('当前平台不支持Google原生认证');
       }
 
+      print('🔍 开始Google原生登录...');
       final GoogleSignInAccount googleUser = await GoogleSignIn.instance
           .authenticate(
             scopeHint: const <String>['openid', 'profile', 'email'],
           );
 
+      _currentUser = googleUser;
+
       print('✅ Google登录成功: ${googleUser.email}');
-      final GoogleSignInAuthentication auth = await googleUser.authentication;
+      final GoogleSignInAuthentication auth = googleUser.authentication;
 
       // 7.2.0 版本只返回 idToken，没有 accessToken
       return <String, dynamic>{
@@ -124,29 +151,9 @@ class GoogleSignInService {
   /// 登出
   Future<void> signOut([TenantConfig? tenantConfig]) async {
     try {
-      // 从TenantConfig中获取Google OAuth配置
-      String? clientId;
-      String? serverClientId;
-
-      if (tenantConfig != null) {
-        final googleChannel = tenantConfig.supportedChannels
-            .where((channel) => channel.channelId == 'google')
-            .firstOrNull;
-
-        if (googleChannel?.config != null) {
-          final platform = getCurrentPlatform();
-          clientId = googleChannel!.config![platform];
-          serverClientId = googleChannel.config!['web'];
-        }
-      }
-
-      if (clientId != null && clientId.isNotEmpty) {
-        await GoogleSignIn.instance.initialize(
-          clientId: clientId,
-          serverClientId: serverClientId,
-        );
-        await GoogleSignIn.instance.signOut();
-      }
+      await _ensureInitialized(tenantConfig);
+      await GoogleSignIn.instance.signOut();
+      _currentUser = null;
       print('✅ Google登出成功');
     } catch (e) {
       print('❌ Google登出失败: $e');
@@ -174,31 +181,15 @@ class GoogleSignInService {
   }
 
   /// 检查是否已登录
+  /// 通过轻量认证尝试恢复会话
   Future<bool> isSignedIn([TenantConfig? tenantConfig]) async {
     try {
-      // 从TenantConfig中获取Google OAuth配置
-      String? clientId;
-      String? serverClientId;
-
-      if (tenantConfig != null) {
-        final googleChannel = tenantConfig.supportedChannels
-            .where((channel) => channel.channelId == 'google')
-            .firstOrNull;
-
-        if (googleChannel?.config != null) {
-          final platform = getCurrentPlatform();
-          clientId = googleChannel!.config![platform];
-          serverClientId = googleChannel.config!['web'];
-        }
-      }
-
-      if (clientId != null && clientId.isNotEmpty) {
-        await GoogleSignIn.instance.initialize(
-          clientId: clientId,
-          serverClientId: serverClientId,
-        );
-        // 7.2.0 版本没有 currentUser 属性，需要通过其他方式检查
-        return false; // 暂时返回 false，需要重新实现
+      await _ensureInitialized(tenantConfig);
+      final account = await GoogleSignIn.instance
+          .attemptLightweightAuthentication();
+      if (account != null) {
+        _currentUser = account;
+        return true;
       }
       return false;
     } catch (e) {
@@ -208,35 +199,22 @@ class GoogleSignInService {
   }
 
   /// 获取当前用户
+  /// 优先返回内存中的当前用户，否则尝试轻量认证恢复
   Future<GoogleSignInAccount?> getCurrentUser([
     TenantConfig? tenantConfig,
   ]) async {
+    if (_currentUser != null) {
+      return _currentUser;
+    }
+
     try {
-      // 从TenantConfig中获取Google OAuth配置
-      String? clientId;
-      String? serverClientId;
-
-      if (tenantConfig != null) {
-        final googleChannel = tenantConfig.supportedChannels
-            .where((channel) => channel.channelId == 'google')
-            .firstOrNull;
-
-        if (googleChannel?.config != null) {
-          final platform = getCurrentPlatform();
-          clientId = googleChannel!.config![platform];
-          serverClientId = googleChannel.config!['web'];
-        }
+      await _ensureInitialized(tenantConfig);
+      final account = await GoogleSignIn.instance
+          .attemptLightweightAuthentication();
+      if (account != null) {
+        _currentUser = account;
       }
-
-      if (clientId != null && clientId.isNotEmpty) {
-        await GoogleSignIn.instance.initialize(
-          clientId: clientId,
-          serverClientId: serverClientId,
-        );
-        // 7.2.0 版本没有 currentUser 属性，需要通过其他方式获取
-        return null; // 暂时返回 null，需要重新实现
-      }
-      return null;
+      return account;
     } catch (e) {
       print('❌ 获取当前Google用户失败: $e');
       return null;
