@@ -19,7 +19,7 @@ dependencies:
   google_sign_in_web: ^1.1.0
   flutter_inappwebview: ^6.1.5
   sign_in_with_apple: ^7.0.1
-  fluwx: ^4.6.1
+  fluwx: ^5.7.7
   # Stage 5 — PKCE SHA256 + base64url helpers for OAuth redirect flow
   crypto: ^3.0.3
   # UserCenterPage 头像功能 — 选图 / crop 到 200x200 / PNG encode
