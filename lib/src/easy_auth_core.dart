@@ -12,6 +12,7 @@ import 'services/google_sign_in_service.dart';
 import 'services/web_apple_login_service.dart';
 import 'services/native_apple_login_service.dart';
 import 'services/wechat_login_service.dart';
+import 'apple_login_platform.dart';
 import 'package:flutter/services.dart' as services;
 import 'widgets/easy_auth_login_page.dart';
 
@@ -425,7 +426,9 @@ class EasyAuth {
       UserInfo? userInfo;
       try {
         final resp = await http.get(
-          Uri.parse('${cfg.baseUrl.replaceAll(RegExp(r'/$'), '')}/oauth/userinfo'),
+          Uri.parse(
+            '${cfg.baseUrl.replaceAll(RegExp(r'/$'), '')}/oauth/userinfo',
+          ),
           headers: {'Authorization': 'Bearer ${result.accessToken}'},
         );
         if (resp.statusCode == 200) {
@@ -716,8 +719,8 @@ class EasyAuth {
   /// 执行Apple登录（统一内部方法）
   Future<LoginResult> _performAppleLogin([BuildContext? context]) async {
     // 平台规则：
-    // - iOS / macOS => 原生登录（内置原生服务）
-    // - 其他平台（含 Web、Android、Windows、Linux）=> WebView 登录
+    // - iOS => 原生登录（内置原生服务）
+    // - macOS Developer ID / Web / Android / Windows / Linux => WebView 登录
     final useNative = _shouldUseAppleNative();
 
     if (useNative) {
@@ -729,22 +732,30 @@ class EasyAuth {
         if (context != null) return await _loginWithAppleWeb(context);
         rethrow;
       } on services.PlatformException catch (e) {
-        // 这是最常见的 native 失败路径(macOS 缺 entitlement / iOS 缺 Capability)
+        // 这是最常见的 native 失败路径(iOS 缺 Capability)
         //   code='1000' / domain='AKAuthenticationError' = 用户取消,不该兜底
         //   code='1001' / authorizedOperation 失败 = 系统拒绝
         //   code='AuthenticationServices' + canceled-by-user = 用户取消
         //   其他都很可能是配置缺失,打详细 log 帮业务方诊断
-        print('🍎 [native-apple] PlatformException: code=${e.code} '
-            'message=${e.message} details=${e.details}');
+        print(
+          '🍎 [native-apple] PlatformException: code=${e.code} '
+          'message=${e.message} details=${e.details}',
+        );
         final cancelled =
-            (e.code == '1000' || (e.message ?? '').toLowerCase().contains('cancel'));
+            (e.code == '1000' ||
+            (e.message ?? '').toLowerCase().contains('cancel'));
         if (cancelled) {
           // 用户主动取消 → 不要回落 web
-          throw auth_exception.PlatformException('User cancelled', platform: 'apple');
+          throw auth_exception.PlatformException(
+            'User cancelled',
+            platform: 'apple',
+          );
         }
         // 配置缺失 / 系统拒绝 → 回落 web,但打条提醒
-        print('🍎 [native-apple] 可能是 macOS / iOS 缺 Sign in with Apple '
-            'entitlement;回落到 WebView 登录。详细配置见 SETUP_GUIDE。');
+        print(
+          '🍎 [native-apple] 可能是 iOS 缺 Sign in with Apple '
+          'entitlement;回落到 WebView 登录。详细配置见 SETUP_GUIDE。',
+        );
         if (context != null) return await _loginWithAppleWeb(context);
         rethrow;
       } catch (e, st) {
@@ -763,12 +774,9 @@ class EasyAuth {
     return await _loginWithAppleWeb(context);
   }
 
-  /// 是否应使用 Apple 原生登录（iOS / macOS 一律原生）
+  /// 是否应使用 Apple 原生登录。Developer ID macOS 不支持该 capability。
   bool _shouldUseAppleNative() {
-    final platform = defaultTargetPlatform;
-    final isApplePlatform =
-        platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
-    return isApplePlatform;
+    return shouldUseNativeAppleLogin(defaultTargetPlatform);
   }
 
   /// Apple原生登录（私有方法）
@@ -842,7 +850,7 @@ class EasyAuth {
     try {
       // 1. 获取Auth Code
       final authCode = await _wechatService.login();
-      
+
       if (authCode == null) {
         throw auth_exception.PlatformException(
           'User cancelled',
@@ -871,7 +879,6 @@ class EasyAuth {
   // 回调设置
   // ========================================
 
-
   // ========================================
   // 会话管理
   // ========================================
@@ -882,7 +889,7 @@ class EasyAuth {
       if (_currentToken != null) {
         await apiClient.logout(_currentToken!);
       }
-      
+
       // 同时登出第三方服务
       try {
         final googleService = GoogleSignInService();
@@ -1025,26 +1032,33 @@ class EasyAuth {
   Future<BindResult> bindChannelSms({
     required String phoneNumber,
     required String code,
-  }) =>
-      bindChannel(channelId: 'sms', channelData: {'phone': phoneNumber, 'code': code});
+  }) => bindChannel(
+    channelId: 'sms',
+    channelData: {'phone': phoneNumber, 'code': code},
+  );
 
   /// 邮箱绑定
   Future<BindResult> bindChannelEmail({
     required String email,
     required String code,
-  }) =>
-      bindChannel(channelId: 'email', channelData: {'email': email, 'code': code});
+  }) => bindChannel(
+    channelId: 'email',
+    channelData: {'email': email, 'code': code},
+  );
 
   /// 微信绑定:用户先走微信 SDK 拿 authCode 再调进来
   Future<BindResult> bindChannelWechat({required String authCode}) =>
       bindChannel(channelId: 'wechat', channelData: {'code': authCode});
 
-  /// Apple 绑定:iOS/macOS 走原生 SDK 拿 idToken,其它平台需要 WebView
+  /// Apple 绑定:iOS 走原生 SDK；macOS Developer ID 与其它平台走 WebView。
   Future<BindResult> bindChannelApple([BuildContext? context]) async {
     if (_shouldUseAppleNative()) {
       final result = await NativeAppleLoginService().signIn();
       if (result == null) {
-        throw auth_exception.PlatformException('User cancelled', platform: 'apple');
+        throw auth_exception.PlatformException(
+          'User cancelled',
+          platform: 'apple',
+        );
       }
       return bindChannel(
         channelId: 'apple',
@@ -1062,7 +1076,10 @@ class EasyAuth {
     }
     final webResult = await WebAppleLoginService().signIn(context);
     if (webResult == null) {
-      throw auth_exception.PlatformException('User cancelled', platform: 'apple');
+      throw auth_exception.PlatformException(
+        'User cancelled',
+        platform: 'apple',
+      );
     }
     return bindChannel(
       channelId: 'apple',
@@ -1078,7 +1095,10 @@ class EasyAuth {
   Future<BindResult> bindChannelGoogle(BuildContext context) async {
     final result = await GoogleSignInService().signIn(context, _tenantConfig);
     if (result == null) {
-      throw auth_exception.PlatformException('User cancelled', platform: 'google');
+      throw auth_exception.PlatformException(
+        'User cancelled',
+        platform: 'google',
+      );
     }
     return bindChannel(
       channelId: 'google',
