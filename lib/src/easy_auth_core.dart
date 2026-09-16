@@ -24,6 +24,10 @@ class EasyAuth {
   UserInfo? _currentUser;
   String? _currentToken;
   TenantConfig? _tenantConfig; // 缓存租户配置（含可用登录方式）
+  Timer? _autoRefreshTimer;
+  Future<String?>? _refreshInFlight;
+  final StreamController<AuthSession?> _sessionController =
+      StreamController<AuthSession?>.broadcast();
 
   // Wechat Service
   final WechatLoginService _wechatService = WechatLoginService();
@@ -51,12 +55,17 @@ class EasyAuth {
   /// 详见 [MergeEvent] 的文档示例。
   Stream<MergeEvent> get onAccountMerge => _accountMergeController.stream;
 
+  /// Emits a new snapshot after login/token refresh, and null after logout or
+  /// expiration. Consumers should use this instead of caching currentToken.
+  Stream<AuthSession?> get onSessionChanged => _sessionController.stream;
+
   static final EasyAuth _instance = EasyAuth._internal();
   factory EasyAuth() => _instance;
   EasyAuth._internal();
 
   /// 初始化EasyAuth
   Future<void> init(EasyAuthConfig config) async {
+    _autoRefreshTimer?.cancel();
     _config = config;
     _apiClient = EasyAuthApiClient(
       baseUrl: config.baseUrl,
@@ -66,6 +75,8 @@ class EasyAuth {
 
     // 先快速恢复本地会话，避免首屏白屏
     await _restoreSession();
+    await _maintainRestoredSession();
+    _scheduleAutoRefresh();
 
     // 优先从缓存加载租户配置（快速可用），随后后台刷新网络配置
     await _loadTenantConfigFromCache();
@@ -154,6 +165,9 @@ class EasyAuth {
     return _config!;
   }
 
+  /// Whether [init] has installed a usable SDK configuration.
+  bool get isInitialized => _config != null && _apiClient != null;
+
   /// API客户端
   EasyAuthApiClient get apiClient {
     if (_apiClient == null) {
@@ -178,7 +192,8 @@ class EasyAuth {
   String? get currentToken => _currentToken;
 
   /// 是否已登录
-  bool get isLoggedIn => _currentToken != null;
+  bool get isLoggedIn =>
+      _currentToken != null && !_isTokenExpired(_currentToken!);
 
   /// 初始化微信服务
   void _initWechatServiceIfNeeded(TenantConfig config) {
@@ -904,17 +919,40 @@ class EasyAuth {
     }
   }
 
-  /// 刷新Token
-  Future<void> refreshToken() async {
-    if (_currentToken == null) return;
+  /// Force-refreshes the current token and returns the replacement. A
+  /// transient refresh error does not discard an access token that is still
+  /// valid; an already-expired token is cleared because it cannot authorize
+  /// application requests anymore.
+  Future<String?> refreshToken() {
+    return getValidToken(forceRefresh: true);
+  }
 
+  /// Returns a token with at least [minValidity] remaining. Concurrent callers
+  /// share one refresh request, which also makes a 401 retry safe to use from
+  /// multiple API clients.
+  Future<String?> getValidToken({
+    bool forceRefresh = false,
+    Duration minValidity = const Duration(minutes: 5),
+  }) async {
+    final token = _currentToken;
+    if (token == null) return null;
+
+    final expiresAt = _tokenExpiresAt(token);
+    final hasEnoughLifetime =
+        expiresAt == null || expiresAt.difference(DateTime.now()) > minValidity;
+    if (!forceRefresh && hasEnoughLifetime) return token;
+
+    final activeRefresh = _refreshInFlight;
+    if (activeRefresh != null) return activeRefresh;
+
+    final refresh = _refreshCurrentToken(token);
+    _refreshInFlight = refresh;
     try {
-      final newToken = await apiClient.refreshToken(_currentToken!);
-      _currentToken = newToken;
-      await _saveToken(newToken);
-    } catch (e) {
-      print('Token refresh failed: $e');
-      await _clearSession();
+      return await refresh;
+    } finally {
+      if (identical(_refreshInFlight, refresh)) {
+        _refreshInFlight = null;
+      }
     }
   }
 
@@ -956,18 +994,25 @@ class EasyAuth {
     if (userInfo != null) {
       await _saveUserInfo(userInfo);
     }
+    _emitSession();
+    _scheduleAutoRefresh();
   }
 
   Future<void> _clearSession() async {
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
     _currentToken = null;
     _currentUser = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('easy_auth_token');
     await prefs.remove('easy_auth_user_info');
+    _sessionController.add(null);
   }
 
   Future<void> _restoreSession() async {
     try {
+      _currentToken = null;
+      _currentUser = null;
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('easy_auth_token');
       final userInfoStr = prefs.getString('easy_auth_user_info');
@@ -982,6 +1027,109 @@ class EasyAuth {
     } catch (e) {
       print('Failed to restore session: $e');
     }
+  }
+
+  Future<void> _maintainRestoredSession() async {
+    final token = _currentToken;
+    if (token == null) return;
+    try {
+      await getValidToken();
+    } catch (e) {
+      print('Restored token refresh failed: $e');
+    }
+  }
+
+  Future<String?> _refreshCurrentToken(String token) async {
+    try {
+      final newToken = await apiClient.refreshToken(token);
+      // A login may have replaced the session while this request was running.
+      if (_currentToken != token) {
+        return _currentToken;
+      }
+      _currentToken = newToken;
+      await _saveToken(newToken);
+      _emitSession();
+      _scheduleAutoRefresh();
+      return newToken;
+    } catch (e) {
+      if (_isTokenExpired(token) && _currentToken == token) {
+        await _clearSession();
+      }
+      rethrow;
+    }
+  }
+
+  void _emitSession() {
+    final token = _currentToken;
+    if (token != null) {
+      _sessionController.add(AuthSession(token: token, userInfo: _currentUser));
+    }
+  }
+
+  void _scheduleAutoRefresh({Duration? retryAfter}) {
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
+    final config = _config;
+    final token = _currentToken;
+    if (config == null || !config.enableAutoRefresh || token == null) return;
+
+    var interval = config.autoRefreshInterval ?? const Duration(minutes: 15);
+    if (interval <= Duration.zero) interval = const Duration(minutes: 15);
+    var delay = retryAfter ?? interval;
+    final expiresAt = _tokenExpiresAt(token);
+    if (retryAfter == null && expiresAt != null) {
+      final untilRefresh =
+          expiresAt.difference(DateTime.now()) - const Duration(minutes: 5);
+      if (untilRefresh < delay) delay = untilRefresh;
+    }
+    if (delay <= Duration.zero) delay = const Duration(seconds: 1);
+
+    _autoRefreshTimer = Timer(delay, () async {
+      var failed = false;
+      try {
+        await getValidToken(forceRefresh: expiresAt == null);
+      } catch (e) {
+        failed = true;
+        print('Automatic token refresh failed: $e');
+      } finally {
+        _scheduleAutoRefresh(
+          retryAfter: failed ? const Duration(minutes: 1) : null,
+        );
+      }
+    });
+  }
+
+  DateTime? _tokenExpiresAt(String token) {
+    try {
+      final parts = token.split('.');
+      if (parts.length != 3) return null;
+      final payload =
+          jsonDecode(
+                utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+              )
+              as Map<String, dynamic>;
+      final exp = payload['exp'];
+      if (exp is! num) return null;
+      return DateTime.fromMillisecondsSinceEpoch(exp.toInt() * 1000);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool _isTokenExpired(String token) {
+    final expiresAt = _tokenExpiresAt(token);
+    return expiresAt != null && !expiresAt.isAfter(DateTime.now());
+  }
+
+  @visibleForTesting
+  Future<void> resetForTesting() async {
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
+    _refreshInFlight = null;
+    _config = null;
+    _apiClient = null;
+    _tenantConfig = null;
+    await _clearSession();
   }
 
   Future<void> _saveToken(String token) async {

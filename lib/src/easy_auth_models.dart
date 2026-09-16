@@ -23,6 +23,14 @@ class EasyAuthConfig {
   });
 }
 
+/// Snapshot emitted whenever the persisted login session changes.
+class AuthSession {
+  final String token;
+  final UserInfo? userInfo;
+
+  const AuthSession({required this.token, this.userInfo});
+}
+
 /// 用户信息
 class UserInfo {
   final String userId;
