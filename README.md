@@ -280,11 +280,12 @@ await EasyAuth().logout();
 在Xcode中启用`Sign in with Apple` Capability。
 
 运行时分发:
-- iOS / macOS 优先使用系统原生 Sign in with Apple。
-- Android / Windows / Linux 会使用 WebView 登录。
-- 如果 iOS / macOS entitlement 或 provisioning profile 配置不完整,SDK 会记录 `🍎 [native-apple]` 日志并回落 WebView。
+- iOS 只使用系统原生 Sign in with Apple；取消、授权失败或服务端会话兑换失败均不会自动打开 Web 登录。
+- macOS / Android / Windows / Linux 使用 WebView 登录；Developer ID 分发的 macOS 应用沿用 Web 登录。
+- iOS 的 entitlement 或 provisioning profile 配置不完整时，应修复签名配置；SDK 返回受控错误，不重复要求用户授权。
+- 同时发起的 Apple 登录共享一次授权和会话兑换请求，用户取消后可以再次主动登录。
 
-WebView 兜底链路会打开 anylogin 的 `/login/apple?tenant_id=<tenantId>`。SDK 会截获
+WebView 登录链路会打开 anylogin 的 `/login/apple?tenant_id=<tenantId>`。SDK 会截获
 `https://auth.janyee.com/apple/callback` 回调 URL,再把完整 `callbackUrl` 提交给
 `/login/directLogin`。因此 anylogin 端必须为当前租户配置正确的 `apple_web_client_id`,
 `apple_team_id`, `apple_key_id`, `apple_private_key_encrypted`。

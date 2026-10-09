@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart' as apple;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'easy_auth_models.dart';
@@ -26,6 +27,7 @@ class EasyAuth {
   TenantConfig? _tenantConfig; // 缓存租户配置（含可用登录方式）
   Timer? _autoRefreshTimer;
   Future<String?>? _refreshInFlight;
+  Future<LoginResult>? _appleLoginInFlight;
   final StreamController<AuthSession?> _sessionController =
       StreamController<AuthSession?>.broadcast();
 
@@ -374,16 +376,36 @@ class EasyAuth {
   // 已移除对外的统一 login() 方法，改为全屏 LoginPage
 
   /// Apple登录（内部API，供组件使用）
-  Future<LoginResult> loginWithApple([BuildContext? context]) async {
+  Future<LoginResult> loginWithApple([BuildContext? context]) {
+    final active = _appleLoginInFlight;
+    if (active != null) return active;
+    late final Future<LoginResult> operation;
+    operation = _runAppleLogin(context).whenComplete(() {
+      if (identical(_appleLoginInFlight, operation)) {
+        _appleLoginInFlight = null;
+      }
+    });
+    _appleLoginInFlight = operation;
+    return operation;
+  }
+
+  Future<LoginResult> _runAppleLogin(BuildContext? context) async {
     try {
-      print('🍎 启动Apple登录...');
-      return await _performAppleLogin(context);
-    } catch (e, stackTrace) {
-      throw auth_exception.AuthenticationException(
-        'Apple login failed: $e',
-        originalError: e,
-        stackTrace: stackTrace,
+      // The legacy API client prints response bodies. Suppress raw Apple-flow
+      // logs here: neither native credentials nor exchanged tokens are public.
+      return await runZoned(
+        () => _performAppleLogin(context),
+        zoneSpecification: ZoneSpecification(print: (_, _, _, _) {}),
       );
+    } on auth_exception.PlatformException {
+      rethrow;
+    } on auth_exception.EasyAuthException catch (error) {
+      throw auth_exception.AuthenticationException(
+        'Apple 登录会话兑换失败${error.statusCode == null ? '' : '（状态码 ${error.statusCode}）'}，请重试或联系支持',
+        statusCode: error.statusCode,
+      );
+    } catch (_) {
+      throw auth_exception.AuthenticationException('Apple 登录暂时无法完成，请稍后重试');
     }
   }
 
@@ -741,42 +763,28 @@ class EasyAuth {
     if (useNative) {
       try {
         return await _loginWithAppleNative();
-      } on services.MissingPluginException catch (e) {
-        // 原生插件未注册 — 极少见(sign_in_with_apple 没装好)
-        print('🍎 [native-apple] MissingPluginException: $e');
-        if (context != null) return await _loginWithAppleWeb(context);
-        rethrow;
-      } on services.PlatformException catch (e) {
-        // 这是最常见的 native 失败路径(iOS 缺 Capability)
-        //   code='1000' / domain='AKAuthenticationError' = 用户取消,不该兜底
-        //   code='1001' / authorizedOperation 失败 = 系统拒绝
-        //   code='AuthenticationServices' + canceled-by-user = 用户取消
-        //   其他都很可能是配置缺失,打详细 log 帮业务方诊断
-        print(
-          '🍎 [native-apple] PlatformException: code=${e.code} '
-          'message=${e.message} details=${e.details}',
+      } on apple.SignInWithAppleAuthorizationException catch (error) {
+        throw auth_exception.PlatformException(
+          error.code == apple.AuthorizationErrorCode.canceled
+              ? 'USER_CANCELLED'
+              : 'APPLE_NATIVE_${error.code.name.toUpperCase()}',
+          platform: 'apple',
         );
-        final cancelled =
-            (e.code == '1000' ||
-            (e.message ?? '').toLowerCase().contains('cancel'));
-        if (cancelled) {
-          // 用户主动取消 → 不要回落 web
-          throw auth_exception.PlatformException(
-            'User cancelled',
-            platform: 'apple',
-          );
-        }
-        // 配置缺失 / 系统拒绝 → 回落 web,但打条提醒
-        print(
-          '🍎 [native-apple] 可能是 iOS 缺 Sign in with Apple '
-          'entitlement;回落到 WebView 登录。详细配置见 SETUP_GUIDE。',
+      } on services.MissingPluginException {
+        throw auth_exception.PlatformException(
+          'APPLE_NATIVE_UNAVAILABLE',
+          platform: 'apple',
         );
-        if (context != null) return await _loginWithAppleWeb(context);
-        rethrow;
-      } catch (e, st) {
-        print('🍎 [native-apple] 未知错误: $e\n$st');
-        if (context != null) return await _loginWithAppleWeb(context);
-        rethrow;
+      } on apple.SignInWithAppleNotSupportedException {
+        throw auth_exception.PlatformException(
+          'APPLE_NATIVE_UNAVAILABLE',
+          platform: 'apple',
+        );
+      } on services.PlatformException {
+        throw auth_exception.PlatformException(
+          'APPLE_NATIVE_UNKNOWN',
+          platform: 'apple',
+        );
       }
     }
 
@@ -799,16 +807,17 @@ class EasyAuth {
     // 使用内置原生服务
     final result = await NativeAppleLoginService().signIn();
 
-    if (result == null) {
+    final idToken = result?['idToken'];
+    if (idToken is! String || idToken.trim().isEmpty) {
       throw auth_exception.PlatformException(
-        'User cancelled',
+        'APPLE_NATIVE_INVALIDRESPONSE',
         platform: 'apple',
       );
     }
 
     final loginResult = await apiClient.loginWithApple(
-      idToken: result['idToken'],
-      authCode: result['authCode'],
+      idToken: idToken,
+      authCode: result?['authCode'],
     );
 
     if (loginResult.isSuccess && loginResult.token != null) {
@@ -1162,6 +1171,7 @@ class EasyAuth {
     _autoRefreshTimer?.cancel();
     _autoRefreshTimer = null;
     _refreshInFlight = null;
+    _appleLoginInFlight = null;
     _config = null;
     _apiClient = null;
     _tenantConfig = null;
