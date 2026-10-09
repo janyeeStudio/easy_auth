@@ -919,6 +919,42 @@ class EasyAuth {
     }
   }
 
+  /// Signs out only the captured session, never a login that replaced it.
+  /// This deliberately avoids global provider sign-out, which cannot be bound
+  /// to this token and could disconnect a newer Google session.
+  Future<bool> logoutIfSessionMatches({
+    required String expectedUserId,
+    required String expectedToken,
+  }) async {
+    bool matches() =>
+        expectedUserId.isNotEmpty &&
+        _currentUser?.userId == expectedUserId &&
+        _currentToken == expectedToken;
+
+    if (!matches()) return false;
+    try {
+      await apiClient.logout(expectedToken);
+    } catch (_) {
+      // A failed remote revoke must not prevent this session's local sign-out.
+    }
+    final prefs = await SharedPreferences.getInstance();
+    if (!matches()) return false;
+
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
+    _currentToken = null;
+    _currentUser = null;
+    // Enqueue both removals before yielding, so a later login's writes follow
+    // them. Do not use _clearSession(), which awaits between these operations.
+    final removals = [
+      prefs.remove('easy_auth_token'),
+      prefs.remove('easy_auth_user_info'),
+    ];
+    _sessionController.add(null);
+    await Future.wait(removals);
+    return true;
+  }
+
   /// Force-refreshes the current token and returns the replacement. A
   /// transient refresh error does not discard an access token that is still
   /// valid; an already-expired token is cleared because it cannot authorize
