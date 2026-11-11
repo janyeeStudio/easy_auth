@@ -35,7 +35,6 @@ class EasyAuthApiClient {
   Future<void> sendSMSCode(String phoneNumber) async {
     print('📤 [sendSMSCode] URL: $baseUrl${EasyAuthApiPaths.sendSMSCode}');
     print('📤 [sendSMSCode] TenantID: $tenantId');
-    print('📤 [sendSMSCode] Phone: $phoneNumber');
 
     final response = await _client.post(
       Uri.parse('$baseUrl${EasyAuthApiPaths.sendSMSCode}'),
@@ -44,7 +43,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [sendSMSCode] Status: ${response.statusCode}');
-    print('📥 [sendSMSCode] Response: ${response.body}');
 
     _handleResponse(response);
   }
@@ -53,7 +51,6 @@ class EasyAuthApiClient {
   Future<void> sendEmailCode(String email) async {
     print('📤 [sendEmailCode] URL: $baseUrl${EasyAuthApiPaths.sendEmailCode}');
     print('📤 [sendEmailCode] TenantID: $tenantId');
-    print('📤 [sendEmailCode] Email: $email');
 
     final response = await _client.post(
       Uri.parse('$baseUrl${EasyAuthApiPaths.sendEmailCode}'),
@@ -62,7 +59,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [sendEmailCode] Status: ${response.statusCode}');
-    print('📥 [sendEmailCode] Response: ${response.body}');
 
     _handleResponse(response);
   }
@@ -73,7 +69,6 @@ class EasyAuthApiClient {
     required String code,
   }) async {
     print('📤 [loginWithSMS] 一次性登录');
-    print('   Phone: $phoneNumber');
 
     final response = await _client.post(
       Uri.parse('$baseUrl${EasyAuthApiPaths.directLogin}'),
@@ -87,7 +82,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [loginWithSMS] Status: ${response.statusCode}');
-    print('📥 [loginWithSMS] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
@@ -111,7 +105,6 @@ class EasyAuthApiClient {
     required String code,
   }) async {
     print('📤 [loginWithEmail] 一次性登录');
-    print('   Email: $email');
 
     final response = await _client.post(
       Uri.parse('$baseUrl${EasyAuthApiPaths.directLogin}'),
@@ -125,7 +118,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [loginWithEmail] Status: ${response.statusCode}');
-    print('📥 [loginWithEmail] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
@@ -147,7 +139,6 @@ class EasyAuthApiClient {
   /// 需要先通过原生SDK获取authCode
   Future<LoginResult> loginWithWechat(String authCode) async {
     print('📤 [loginWithWechat] 一次性登录');
-    print('   AuthCode: ${authCode.substring(0, 10)}...');
 
     final response = await _client.post(
       Uri.parse('$baseUrl${EasyAuthApiPaths.directLogin}'),
@@ -161,7 +152,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [loginWithWechat] Status: ${response.statusCode}');
-    print('📥 [loginWithWechat] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
@@ -205,7 +195,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [loginWithApple] Status: ${response.statusCode}');
-    print('📥 [loginWithApple] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
@@ -229,7 +218,6 @@ class EasyAuthApiClient {
     String? platform,
   }) async {
     print('📤 [loginWithAppleWeb] Web登录 - 平台: $platform');
-    print('   Callback URL: $callbackUrl');
 
     final response = await _client.post(
       Uri.parse('$baseUrl${EasyAuthApiPaths.directLogin}'),
@@ -246,7 +234,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [loginWithAppleWeb] Status: ${response.statusCode}');
-    print('📥 [loginWithAppleWeb] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
@@ -308,7 +295,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [loginWithGoogle] Status: ${response.statusCode}');
-    print('📥 [loginWithGoogle] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
@@ -395,7 +381,6 @@ class EasyAuthApiClient {
     );
 
     print('🌐 [getTenantConfig] Status: ${response.statusCode}');
-    print('🌐 [getTenantConfig] Response: ${response.body}');
 
     final data = _handleResponse(response);
     return TenantConfig.fromJson(data);
@@ -428,7 +413,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [bindChannel] Status: ${response.statusCode}');
-    print('📥 [bindChannel] Response: ${response.body}');
 
     final (status, body) = _rawJsonResponse(response);
     _checkAccountState(status, body); // 401 + account_merged 等特殊错误抛 AccountStateException
@@ -459,7 +443,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [resolveBindConflict] Status: ${response.statusCode}');
-    print('📥 [resolveBindConflict] Response: ${response.body}');
 
     final (status, body) = _rawJsonResponse(response);
     _checkAccountState(status, body);

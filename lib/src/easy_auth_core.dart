@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart' as apple;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'easy_auth_models.dart';
@@ -12,6 +13,7 @@ import 'services/google_sign_in_service.dart';
 import 'services/web_apple_login_service.dart';
 import 'services/native_apple_login_service.dart';
 import 'services/wechat_login_service.dart';
+import 'apple_login_platform.dart';
 import 'package:flutter/services.dart' as services;
 import 'widgets/easy_auth_login_page.dart';
 
@@ -25,6 +27,7 @@ class EasyAuth {
   TenantConfig? _tenantConfig; // 缓存租户配置（含可用登录方式）
   Timer? _autoRefreshTimer;
   Future<String?>? _refreshInFlight;
+  Future<LoginResult>? _appleLoginInFlight;
   final StreamController<AuthSession?> _sessionController =
       StreamController<AuthSession?>.broadcast();
 
@@ -373,16 +376,36 @@ class EasyAuth {
   // 已移除对外的统一 login() 方法，改为全屏 LoginPage
 
   /// Apple登录（内部API，供组件使用）
-  Future<LoginResult> loginWithApple([BuildContext? context]) async {
+  Future<LoginResult> loginWithApple([BuildContext? context]) {
+    final active = _appleLoginInFlight;
+    if (active != null) return active;
+    late final Future<LoginResult> operation;
+    operation = _runAppleLogin(context).whenComplete(() {
+      if (identical(_appleLoginInFlight, operation)) {
+        _appleLoginInFlight = null;
+      }
+    });
+    _appleLoginInFlight = operation;
+    return operation;
+  }
+
+  Future<LoginResult> _runAppleLogin(BuildContext? context) async {
     try {
-      print('🍎 启动Apple登录...');
-      return await _performAppleLogin(context);
-    } catch (e, stackTrace) {
-      throw auth_exception.AuthenticationException(
-        'Apple login failed: $e',
-        originalError: e,
-        stackTrace: stackTrace,
+      // The legacy API client prints response bodies. Suppress raw Apple-flow
+      // logs here: neither native credentials nor exchanged tokens are public.
+      return await runZoned(
+        () => _performAppleLogin(context),
+        zoneSpecification: ZoneSpecification(print: (_, _, _, _) {}),
       );
+    } on auth_exception.PlatformException {
+      rethrow;
+    } on auth_exception.EasyAuthException catch (error) {
+      throw auth_exception.AuthenticationException(
+        'Apple 登录会话兑换失败${error.statusCode == null ? '' : '（状态码 ${error.statusCode}）'}，请重试或联系支持',
+        statusCode: error.statusCode,
+      );
+    } catch (_) {
+      throw auth_exception.AuthenticationException('Apple 登录暂时无法完成，请稍后重试');
     }
   }
 
@@ -440,7 +463,9 @@ class EasyAuth {
       UserInfo? userInfo;
       try {
         final resp = await http.get(
-          Uri.parse('${cfg.baseUrl.replaceAll(RegExp(r'/$'), '')}/oauth/userinfo'),
+          Uri.parse(
+            '${cfg.baseUrl.replaceAll(RegExp(r'/$'), '')}/oauth/userinfo',
+          ),
           headers: {'Authorization': 'Bearer ${result.accessToken}'},
         );
         if (resp.statusCode == 200) {
@@ -731,41 +756,35 @@ class EasyAuth {
   /// 执行Apple登录（统一内部方法）
   Future<LoginResult> _performAppleLogin([BuildContext? context]) async {
     // 平台规则：
-    // - iOS / macOS => 原生登录（内置原生服务）
-    // - 其他平台（含 Web、Android、Windows、Linux）=> WebView 登录
+    // - iOS => 原生登录（内置原生服务）
+    // - macOS Developer ID / Web / Android / Windows / Linux => WebView 登录
     final useNative = _shouldUseAppleNative();
 
     if (useNative) {
       try {
         return await _loginWithAppleNative();
-      } on services.MissingPluginException catch (e) {
-        // 原生插件未注册 — 极少见(sign_in_with_apple 没装好)
-        print('🍎 [native-apple] MissingPluginException: $e');
-        if (context != null) return await _loginWithAppleWeb(context);
-        rethrow;
-      } on services.PlatformException catch (e) {
-        // 这是最常见的 native 失败路径(macOS 缺 entitlement / iOS 缺 Capability)
-        //   code='1000' / domain='AKAuthenticationError' = 用户取消,不该兜底
-        //   code='1001' / authorizedOperation 失败 = 系统拒绝
-        //   code='AuthenticationServices' + canceled-by-user = 用户取消
-        //   其他都很可能是配置缺失,打详细 log 帮业务方诊断
-        print('🍎 [native-apple] PlatformException: code=${e.code} '
-            'message=${e.message} details=${e.details}');
-        final cancelled =
-            (e.code == '1000' || (e.message ?? '').toLowerCase().contains('cancel'));
-        if (cancelled) {
-          // 用户主动取消 → 不要回落 web
-          throw auth_exception.PlatformException('User cancelled', platform: 'apple');
-        }
-        // 配置缺失 / 系统拒绝 → 回落 web,但打条提醒
-        print('🍎 [native-apple] 可能是 macOS / iOS 缺 Sign in with Apple '
-            'entitlement;回落到 WebView 登录。详细配置见 SETUP_GUIDE。');
-        if (context != null) return await _loginWithAppleWeb(context);
-        rethrow;
-      } catch (e, st) {
-        print('🍎 [native-apple] 未知错误: $e\n$st');
-        if (context != null) return await _loginWithAppleWeb(context);
-        rethrow;
+      } on apple.SignInWithAppleAuthorizationException catch (error) {
+        throw auth_exception.PlatformException(
+          error.code == apple.AuthorizationErrorCode.canceled
+              ? 'USER_CANCELLED'
+              : 'APPLE_NATIVE_${error.code.name.toUpperCase()}',
+          platform: 'apple',
+        );
+      } on services.MissingPluginException {
+        throw auth_exception.PlatformException(
+          'APPLE_NATIVE_UNAVAILABLE',
+          platform: 'apple',
+        );
+      } on apple.SignInWithAppleNotSupportedException {
+        throw auth_exception.PlatformException(
+          'APPLE_NATIVE_UNAVAILABLE',
+          platform: 'apple',
+        );
+      } on services.PlatformException {
+        throw auth_exception.PlatformException(
+          'APPLE_NATIVE_UNKNOWN',
+          platform: 'apple',
+        );
       }
     }
 
@@ -778,12 +797,9 @@ class EasyAuth {
     return await _loginWithAppleWeb(context);
   }
 
-  /// 是否应使用 Apple 原生登录（iOS / macOS 一律原生）
+  /// 是否应使用 Apple 原生登录。Developer ID macOS 不支持该 capability。
   bool _shouldUseAppleNative() {
-    final platform = defaultTargetPlatform;
-    final isApplePlatform =
-        platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
-    return isApplePlatform;
+    return shouldUseNativeAppleLogin(defaultTargetPlatform);
   }
 
   /// Apple原生登录（私有方法）
@@ -791,16 +807,17 @@ class EasyAuth {
     // 使用内置原生服务
     final result = await NativeAppleLoginService().signIn();
 
-    if (result == null) {
+    final idToken = result?['idToken'];
+    if (idToken is! String || idToken.trim().isEmpty) {
       throw auth_exception.PlatformException(
-        'User cancelled',
+        'APPLE_NATIVE_INVALIDRESPONSE',
         platform: 'apple',
       );
     }
 
     final loginResult = await apiClient.loginWithApple(
-      idToken: result['idToken'],
-      authCode: result['authCode'],
+      idToken: idToken,
+      authCode: result?['authCode'],
     );
 
     if (loginResult.isSuccess && loginResult.token != null) {
@@ -857,7 +874,7 @@ class EasyAuth {
     try {
       // 1. 获取Auth Code
       final authCode = await _wechatService.login();
-      
+
       if (authCode == null) {
         throw auth_exception.PlatformException(
           'User cancelled',
@@ -886,7 +903,6 @@ class EasyAuth {
   // 回调设置
   // ========================================
 
-
   // ========================================
   // 会话管理
   // ========================================
@@ -897,7 +913,7 @@ class EasyAuth {
       if (_currentToken != null) {
         await apiClient.logout(_currentToken!);
       }
-      
+
       // 同时登出第三方服务
       try {
         final googleService = GoogleSignInService();
@@ -910,6 +926,42 @@ class EasyAuth {
     } finally {
       await _clearSession();
     }
+  }
+
+  /// Signs out only the captured session, never a login that replaced it.
+  /// This deliberately avoids global provider sign-out, which cannot be bound
+  /// to this token and could disconnect a newer Google session.
+  Future<bool> logoutIfSessionMatches({
+    required String expectedUserId,
+    required String expectedToken,
+  }) async {
+    bool matches() =>
+        expectedUserId.isNotEmpty &&
+        _currentUser?.userId == expectedUserId &&
+        _currentToken == expectedToken;
+
+    if (!matches()) return false;
+    try {
+      await apiClient.logout(expectedToken);
+    } catch (_) {
+      // A failed remote revoke must not prevent this session's local sign-out.
+    }
+    final prefs = await SharedPreferences.getInstance();
+    if (!matches()) return false;
+
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
+    _currentToken = null;
+    _currentUser = null;
+    // Enqueue both removals before yielding, so a later login's writes follow
+    // them. Do not use _clearSession(), which awaits between these operations.
+    final removals = [
+      prefs.remove('easy_auth_token'),
+      prefs.remove('easy_auth_user_info'),
+    ];
+    _sessionController.add(null);
+    await Future.wait(removals);
+    return true;
   }
 
   /// Force-refreshes the current token and returns the replacement. A
@@ -1119,6 +1171,7 @@ class EasyAuth {
     _autoRefreshTimer?.cancel();
     _autoRefreshTimer = null;
     _refreshInFlight = null;
+    _appleLoginInFlight = null;
     _config = null;
     _apiClient = null;
     _tenantConfig = null;
@@ -1173,26 +1226,33 @@ class EasyAuth {
   Future<BindResult> bindChannelSms({
     required String phoneNumber,
     required String code,
-  }) =>
-      bindChannel(channelId: 'sms', channelData: {'phone': phoneNumber, 'code': code});
+  }) => bindChannel(
+    channelId: 'sms',
+    channelData: {'phone': phoneNumber, 'code': code},
+  );
 
   /// 邮箱绑定
   Future<BindResult> bindChannelEmail({
     required String email,
     required String code,
-  }) =>
-      bindChannel(channelId: 'email', channelData: {'email': email, 'code': code});
+  }) => bindChannel(
+    channelId: 'email',
+    channelData: {'email': email, 'code': code},
+  );
 
   /// 微信绑定:用户先走微信 SDK 拿 authCode 再调进来
   Future<BindResult> bindChannelWechat({required String authCode}) =>
       bindChannel(channelId: 'wechat', channelData: {'code': authCode});
 
-  /// Apple 绑定:iOS/macOS 走原生 SDK 拿 idToken,其它平台需要 WebView
+  /// Apple 绑定:iOS 走原生 SDK；macOS Developer ID 与其它平台走 WebView。
   Future<BindResult> bindChannelApple([BuildContext? context]) async {
     if (_shouldUseAppleNative()) {
       final result = await NativeAppleLoginService().signIn();
       if (result == null) {
-        throw auth_exception.PlatformException('User cancelled', platform: 'apple');
+        throw auth_exception.PlatformException(
+          'User cancelled',
+          platform: 'apple',
+        );
       }
       return bindChannel(
         channelId: 'apple',
@@ -1210,7 +1270,10 @@ class EasyAuth {
     }
     final webResult = await WebAppleLoginService().signIn(context);
     if (webResult == null) {
-      throw auth_exception.PlatformException('User cancelled', platform: 'apple');
+      throw auth_exception.PlatformException(
+        'User cancelled',
+        platform: 'apple',
+      );
     }
     return bindChannel(
       channelId: 'apple',
@@ -1226,7 +1289,10 @@ class EasyAuth {
   Future<BindResult> bindChannelGoogle(BuildContext context) async {
     final result = await GoogleSignInService().signIn(context, _tenantConfig);
     if (result == null) {
-      throw auth_exception.PlatformException('User cancelled', platform: 'google');
+      throw auth_exception.PlatformException(
+        'User cancelled',
+        platform: 'google',
+      );
     }
     return bindChannel(
       channelId: 'google',

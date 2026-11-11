@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import '../web_callback_gate.dart';
+
 /// WebView登录对话框
 class WebViewLoginDialog extends StatefulWidget {
   final String loginUrl;
@@ -28,6 +30,7 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
   String? _mainFrameError;
   bool _completed = false; // 防止重复调用onResult
   InAppWebViewController? _ctrl;
+  late final WebCallbackGate _callbackGate;
   Timer? _urlPoll;
   Timer? _loadingWatchdog;
   int _progress = 0;
@@ -49,6 +52,7 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
   @override
   void initState() {
     super.initState();
+    _callbackGate = WebCallbackGate(_matchesCallback);
     // Start before the native WebView exists. WebView2 creation itself can
     // fail or stall when the runtime is missing; waiting for onWebViewCreated
     // alone would leave the dialog's loading indicator running forever.
@@ -77,17 +81,18 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
         if (uri == null) return;
         final url = uri.toString();
         if (_matchesCallback(url)) {
-          t.cancel();
-          if (!_completed) _handleCallback(url);
+          _callbackGate.observeNavigation(url);
+          final title = await _ctrl?.getTitle();
+          if (_callbackGate.completeFromPoll(url, title)) {
+            t.cancel();
+            if (!_completed) _handleCallback(url);
+          }
         }
       } catch (_) {
         /* poll 出错就跳过这次 */
       }
     });
   }
-
-  /// 获取回调URL(主)。仅用于日志,实际匹配走 _matchesCallback。
-  String _getCallbackUrl() => _callbackUrls().first;
 
   /// 兼容的回调 URL 前缀列表 — Apple Developer 上 Service ID 的 redirect_uri
   /// 历史上配过老的 `api.janyee.com/user/apple/callback`,后端迁到 auth 子域
@@ -281,9 +286,13 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
             final url = createNavigationAction.request.url?.toString();
             _trace('onCreateWindow', url);
             if (url != null && _matchesCallback(url) && !_completed) {
-              _handleCallback(url);
-              // The callback has been consumed by the Flutter layer. Tell
-              // WebView2 not to navigate to the one-time OAuth callback.
+              _callbackGate.observeNavigation(url);
+              // AnyLogin must receive the callback first so it can validate
+              // the state cookie and stage the one-time code in Redis.
+              if (isWindows) return false;
+              await controller.loadUrl(
+                urlRequest: createNavigationAction.request,
+              );
               return true;
             }
             if (isWindows) {
@@ -305,8 +314,8 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
             final url = navAction.request.url?.toString() ?? '';
             _trace('shouldOverride', url);
             if (_matchesCallback(url)) {
-              if (!_completed) _handleCallback(url);
-              return NavigationActionPolicy.CANCEL;
+              _callbackGate.observeNavigation(url);
+              return NavigationActionPolicy.ALLOW;
             }
             return NavigationActionPolicy.ALLOW;
           },
@@ -322,14 +331,14 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
             _trace('onLoadStart', url);
             final s = url?.toString();
             if (s != null && _matchesCallback(s) && !_completed) {
-              _handleCallback(s);
+              _callbackGate.observeNavigation(s);
             }
           },
           onUpdateVisitedHistory: (controller, url, androidIsReload) {
             _trace('onUpdateVisitedHistory', url);
             final s = url?.toString();
             if (s != null && _matchesCallback(s) && !_completed) {
-              _handleCallback(s);
+              _callbackGate.observeNavigation(s);
             }
           },
           onProgressChanged: (controller, progress) {
@@ -351,7 +360,9 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
             }
             _trace('onLoadStop', url);
             final s = url?.toString();
-            if (s != null && _matchesCallback(s) && !_completed) {
+            if (s != null &&
+                _callbackGate.completeAfterLoad(s) &&
+                !_completed) {
               _handleCallback(s);
             }
           },
@@ -463,16 +474,12 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
       return;
     }
     _completed = true;
+    _callbackGate.reset();
 
     try {
-      print('🔍 处理回调URL: $url');
       final uri = Uri.parse(url);
       final code = uri.queryParameters['code'];
-      final state = uri.queryParameters['state'];
       final error = uri.queryParameters['error'];
-
-      print('🔍 URL参数 - code: $code, state: $state, error: $error');
-      print('🔍 所有查询参数: ${uri.queryParameters}');
 
       // 检查是否有错误
       if (error != null) {
@@ -484,12 +491,8 @@ class _WebViewLoginDialogState extends State<WebViewLoginDialog> {
       }
 
       if (code != null && code.isNotEmpty) {
-        print('✅ 获取到授权码: $code');
-
         // 直接返回回调URL，让EasyAuth调用后端API
         final result = {'callbackUrl': url, 'platform': 'web'};
-
-        print('🔍 WebView返回回调URL: $result');
 
         // 返回结果，让调用方处理对话框关闭
         widget.onResult(result);
