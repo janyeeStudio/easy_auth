@@ -30,6 +30,9 @@ class VerificationLoginForm extends StatefulWidget {
   /// 主题色
   final Color? primaryColor;
 
+  /// Optional account whose access code is supplied out of band for review.
+  final String? reviewAccessEmail;
+
   const VerificationLoginForm({
     super.key,
     required this.type,
@@ -42,16 +45,14 @@ class VerificationLoginForm extends StatefulWidget {
     this.loginButtonStyle,
     this.countdownSeconds = 60,
     this.primaryColor,
+    this.reviewAccessEmail,
   });
 
   @override
   State<VerificationLoginForm> createState() => _VerificationLoginFormState();
 }
 
-enum VerificationType {
-  sms,
-  email,
-}
+enum VerificationType { sms, email }
 
 class _VerificationLoginFormState extends State<VerificationLoginForm> {
   final _inputController = TextEditingController();
@@ -61,6 +62,12 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
   bool _loading = false;
   int _countdown = 0;
   Timer? _timer;
+
+  bool get _isReviewAccount =>
+      widget.type == VerificationType.email &&
+      widget.reviewAccessEmail != null &&
+      _inputController.text.trim().toLowerCase() ==
+          widget.reviewAccessEmail!.trim().toLowerCase();
 
   @override
   void dispose() {
@@ -78,7 +85,9 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
     if (input.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(widget.type == VerificationType.sms ? '请输入手机号' : '请输入邮箱地址'),
+          content: Text(
+            widget.type == VerificationType.sms ? '请输入手机号' : '请输入邮箱地址',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -89,14 +98,20 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
     if (widget.type == VerificationType.sms) {
       if (!RegExp(r'^1[3-9]\d{9}$').hasMatch(input)) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('请输入有效的手机号'), backgroundColor: Colors.red),
+          const SnackBar(
+            content: Text('请输入有效的手机号'),
+            backgroundColor: Colors.red,
+          ),
         );
         return;
       }
     } else {
       if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(input)) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('请输入有效的邮箱地址'), backgroundColor: Colors.red),
+          const SnackBar(
+            content: Text('请输入有效的邮箱地址'),
+            backgroundColor: Colors.red,
+          ),
         );
         return;
       }
@@ -128,7 +143,9 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(widget.type == VerificationType.sms ? '验证码已发送' : '验证码已发送到邮箱'),
+            content: Text(
+              widget.type == VerificationType.sms ? '验证码已发送' : '验证码已发送到邮箱',
+            ),
             duration: const Duration(seconds: 2),
           ),
         );
@@ -202,7 +219,11 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
           // 输入框（手机号或邮箱）
           TextFormField(
             controller: _inputController,
-            decoration: widget.inputDecoration ??
+            onChanged: (_) {
+              if (widget.reviewAccessEmail != null) setState(() {});
+            },
+            decoration:
+                widget.inputDecoration ??
                 InputDecoration(
                   labelText: isSms ? '手机号' : '邮箱',
                   hintText: isSms ? '请输入手机号' : '请输入邮箱地址',
@@ -235,7 +256,9 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
                     vertical: 12,
                   ),
                 ),
-            keyboardType: isSms ? TextInputType.phone : TextInputType.emailAddress,
+            keyboardType: isSms
+                ? TextInputType.phone
+                : TextInputType.emailAddress,
             validator: (value) {
               if (value == null || value.isEmpty) {
                 return isSms ? '请输入手机号' : '请输入邮箱地址';
@@ -245,7 +268,9 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
                   return '请输入有效的手机号';
                 }
               } else {
-                if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(value)) {
+                if (!RegExp(
+                  r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$',
+                ).hasMatch(value)) {
                   return '请输入有效的邮箱地址';
                 }
               }
@@ -262,7 +287,8 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
               Expanded(
                 child: TextFormField(
                   controller: _codeController,
-                  decoration: widget.codeDecoration ??
+                  decoration:
+                      widget.codeDecoration ??
                       InputDecoration(
                         labelText: '验证码',
                         hintText: '请输入验证码',
@@ -299,13 +325,20 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
                         ),
                         counterText: '',
                       ),
-                  keyboardType: TextInputType.number,
-                  maxLength: 4,
+                  keyboardType: _isReviewAccount
+                      ? TextInputType.visiblePassword
+                      : TextInputType.number,
+                  obscureText: _isReviewAccount,
+                  maxLength: _isReviewAccount ? 64 : 4,
                   validator: (value) {
                     if (value == null || value.isEmpty) {
                       return '请输入验证码';
                     }
-                    if (value.length != 4) {
+                    if (_isReviewAccount) {
+                      if (!RegExp(r'^[A-Za-z0-9_-]{32,64}$').hasMatch(value)) {
+                        return '请输入审核访问码';
+                      }
+                    } else if (!RegExp(r'^\d{4}$').hasMatch(value)) {
                       return '验证码为4位数字';
                     }
                     return null;
@@ -313,29 +346,31 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
                 ),
               ),
               const SizedBox(width: 12),
-              SizedBox(
-                width: 110,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _countdown > 0 || _loading ? null : _sendCode,
-                  style: widget.sendButtonStyle ??
-                      ElevatedButton.styleFrom(
-                        backgroundColor: primaryColor.withValues(alpha: 0.1),
-                        foregroundColor: primaryColor,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+              if (!_isReviewAccount)
+                SizedBox(
+                  width: 110,
+                  height: 56,
+                  child: ElevatedButton(
+                    onPressed: _countdown > 0 || _loading ? null : _sendCode,
+                    style:
+                        widget.sendButtonStyle ??
+                        ElevatedButton.styleFrom(
+                          backgroundColor: primaryColor.withValues(alpha: 0.1),
+                          foregroundColor: primaryColor,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
                         ),
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                      ),
-                  child: _countdown > 0
-                      ? Text(
-                          '$_countdown秒',
-                          style: const TextStyle(fontSize: 13),
-                        )
-                      : const Text('发送验证码', style: TextStyle(fontSize: 13)),
+                    child: _countdown > 0
+                        ? Text(
+                            '$_countdown秒',
+                            style: const TextStyle(fontSize: 13),
+                          )
+                        : const Text('发送验证码', style: TextStyle(fontSize: 13)),
+                  ),
                 ),
-              ),
             ],
           ),
 
@@ -346,7 +381,8 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
             height: 52,
             child: ElevatedButton(
               onPressed: _loading ? null : _login,
-              style: widget.loginButtonStyle ??
+              style:
+                  widget.loginButtonStyle ??
                   ElevatedButton.styleFrom(
                     backgroundColor: primaryColor,
                     foregroundColor: Colors.white,
@@ -379,4 +415,3 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
     );
   }
 }
-

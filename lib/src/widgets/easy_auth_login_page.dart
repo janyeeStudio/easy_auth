@@ -421,6 +421,8 @@ class _EasyAuthLoginPageState extends State<EasyAuthLoginPage> {
                                 SingleChildScrollView(
                                   child: VerificationLoginForm(
                                     type: VerificationType.email,
+                                    reviewAccessEmail:
+                                        EasyAuth().config.reviewAccessEmail,
                                     onLoginSuccess: _handleLoginSuccess,
                                     onLoginFailed: _handleLoginFailed,
                                     onLoginStart: () =>
@@ -441,6 +443,7 @@ class _EasyAuthLoginPageState extends State<EasyAuthLoginPage> {
                       type: hasSMS
                           ? VerificationType.sms
                           : VerificationType.email,
+                      reviewAccessEmail: EasyAuth().config.reviewAccessEmail,
                       onLoginSuccess: _handleLoginSuccess,
                       onLoginFailed: _handleLoginFailed,
                       onLoginStart: () => setState(() => _submitting = true),

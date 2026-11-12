@@ -19,6 +19,10 @@ class EasyAuthConfig {
   /// cached tenant configurations. Existing bindings are not deleted.
   final Set<String> disabledLoginChannels;
 
+  /// A dedicated review account that uses a long, server-validated access code.
+  /// This is an account identifier, not the access code itself.
+  final String? reviewAccessEmail;
+
   const EasyAuthConfig({
     required this.baseUrl,
     required this.tenantId,
@@ -30,6 +34,7 @@ class EasyAuthConfig {
     this.surfaceColor,
     this.nativeAppleLoginOnMacOS = false,
     this.disabledLoginChannels = const {},
+    this.reviewAccessEmail,
   });
 }
 
