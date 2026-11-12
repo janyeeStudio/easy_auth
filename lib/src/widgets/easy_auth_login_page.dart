@@ -46,11 +46,10 @@ class _EasyAuthLoginPageState extends State<EasyAuthLoginPage> {
       _configError = null;
     });
     try {
-      await EasyAuth()
-          .reloadTenantConfig()
-          .timeout(const Duration(seconds: 10),
-              onTimeout: () =>
-                  throw TimeoutException('加载租户配置超时,请检查网络'));
+      await EasyAuth().reloadTenantConfig().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw TimeoutException('加载租户配置超时,请检查网络'),
+      );
       if (!mounted) return;
       setState(() => _loadingConfig = false);
     } catch (e) {
@@ -145,8 +144,11 @@ class _EasyAuthLoginPageState extends State<EasyAuthLoginPage> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.cloud_off,
-                  size: 56, color: isDarkMode ? Colors.red[300] : Colors.red[600]),
+              Icon(
+                Icons.cloud_off,
+                size: 56,
+                color: isDarkMode ? Colors.red[300] : Colors.red[600],
+              ),
               const SizedBox(height: 16),
               Text(
                 '登录配置加载失败',
@@ -173,8 +175,9 @@ class _EasyAuthLoginPageState extends State<EasyAuthLoginPage> {
               ),
               const SizedBox(height: 8),
               TextButton(
-                onPressed: () => Navigator.of(context)
-                    .pop<LoginResult>(LoginResult.failure('用户取消登录')),
+                onPressed: () => Navigator.of(
+                  context,
+                ).pop<LoginResult>(LoginResult.failure('用户取消登录')),
                 child: const Text('关闭'),
               ),
             ],
@@ -343,7 +346,9 @@ class _EasyAuthLoginPageState extends State<EasyAuthLoginPage> {
     bool isDarkMode,
     TenantConfig tenantConfig,
   ) {
-    final channels = tenantConfig.supportedChannels;
+    final channels = tenantConfig.supportedChannels.where(
+      (ch) => EasyAuth().isLoginChannelEnabled(ch.channelId),
+    );
 
     // 分离验证码登录和第三方登录
     final hasSMS = channels.any((ch) => ch.channelId == 'sms');

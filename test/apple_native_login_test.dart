@@ -110,6 +110,38 @@ void main() {
     await EasyAuth().resetForTesting();
   });
 
+  testWidgets(
+    'macOS store build uses native Apple authorization',
+    (tester) async {
+      await EasyAuth().init(
+        const EasyAuthConfig(
+          baseUrl: 'https://auth.test',
+          tenantId: 'kiku_app',
+          sceneId: 'app_native',
+          enableAutoRefresh: false,
+          nativeAppleLoginOnMacOS: true,
+        ),
+      );
+      final navigation = _Navigation();
+      final context = await _context(tester, navigation);
+      native = () async =>
+          throw PlatformException(code: 'authorization-error/canceled');
+      await expectLater(
+        EasyAuth().loginWithApple(context),
+        throwsA(
+          isA<auth.PlatformException>().having(
+            (e) => e.message,
+            'canceled',
+            'USER_CANCELLED',
+          ),
+        ),
+      );
+      expect(nativeCalls, 1);
+      expect(navigation.pushes, 1);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+  );
+
   const nativeErrors = {
     'canceled': 'USER_CANCELLED',
     'failed': 'APPLE_NATIVE_FAILED',

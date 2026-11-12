@@ -77,6 +77,9 @@ class EasyAuth {
 
     // 先快速恢复本地会话，避免首屏白屏
     await _restoreSession();
+    // Listeners can attach while the asynchronous restore is in progress.
+    // Notify them when a still-valid session becomes available.
+    if (isLoggedIn) _emitSession();
     await _maintainRestoredSession();
     _scheduleAutoRefresh();
 
@@ -170,6 +173,9 @@ class EasyAuth {
   /// Whether [init] has installed a usable SDK configuration.
   bool get isInitialized => _config != null && _apiClient != null;
 
+  bool isLoginChannelEnabled(String channelId) =>
+      !(_config?.disabledLoginChannels.contains(channelId) ?? false);
+
   /// API客户端
   EasyAuthApiClient get apiClient {
     if (_apiClient == null) {
@@ -199,6 +205,7 @@ class EasyAuth {
 
   /// 初始化微信服务
   void _initWechatServiceIfNeeded(TenantConfig config) {
+    if (!isLoginChannelEnabled('wechat')) return;
     try {
       SupportedChannelInfo? wechatChannel;
       for (final c in config.supportedChannels) {
@@ -757,7 +764,7 @@ class EasyAuth {
   Future<LoginResult> _performAppleLogin([BuildContext? context]) async {
     // 平台规则：
     // - iOS => 原生登录（内置原生服务）
-    // - macOS Developer ID / Web / Android / Windows / Linux => WebView 登录
+    // - macOS App Store with the capability => native; Developer ID => WebView
     final useNative = _shouldUseAppleNative();
 
     if (useNative) {
@@ -799,7 +806,10 @@ class EasyAuth {
 
   /// 是否应使用 Apple 原生登录。Developer ID macOS 不支持该 capability。
   bool _shouldUseAppleNative() {
-    return shouldUseNativeAppleLogin(defaultTargetPlatform);
+    return shouldUseNativeAppleLogin(
+      defaultTargetPlatform,
+      nativeMacOS: _config?.nativeAppleLoginOnMacOS ?? false,
+    );
   }
 
   /// Apple原生登录（私有方法）
@@ -871,6 +881,9 @@ class EasyAuth {
 
   /// 微信登录
   Future<LoginResult> loginWithWechat() async {
+    if (!isLoginChannelEnabled('wechat')) {
+      throw auth_exception.PlatformException('微信登录已停用', platform: 'wechat');
+    }
     try {
       // 1. 获取Auth Code
       final authCode = await _wechatService.login();

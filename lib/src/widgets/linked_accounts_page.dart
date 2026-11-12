@@ -116,14 +116,15 @@ class _LinkedAccountsPageState extends State<LinkedAccountsPage> {
       builder: (_) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: const [
-            ListTile(title: Text('选择登录方式', style: TextStyle(fontWeight: FontWeight.bold))),
-            Divider(height: 1),
-            _ChannelOption(channelId: 'sms', label: '短信验证码', icon: Icons.sms),
-            _ChannelOption(channelId: 'email', label: '邮箱验证码', icon: Icons.email),
-            _ChannelOption(channelId: 'wechat', label: '微信', icon: Icons.chat),
-            _ChannelOption(channelId: 'apple', label: 'Apple ID', icon: Icons.apple),
-            _ChannelOption(channelId: 'google', label: 'Google', icon: Icons.g_mobiledata),
+          children: [
+            const ListTile(title: Text('选择登录方式', style: TextStyle(fontWeight: FontWeight.bold))),
+            const Divider(height: 1),
+            const _ChannelOption(channelId: 'sms', label: '短信验证码', icon: Icons.sms),
+            const _ChannelOption(channelId: 'email', label: '邮箱验证码', icon: Icons.email),
+            if (EasyAuth().isLoginChannelEnabled('wechat'))
+              const _ChannelOption(channelId: 'wechat', label: '微信', icon: Icons.chat),
+            const _ChannelOption(channelId: 'apple', label: 'Apple ID', icon: Icons.apple),
+            const _ChannelOption(channelId: 'google', label: 'Google', icon: Icons.g_mobiledata),
           ],
         ),
       ),
