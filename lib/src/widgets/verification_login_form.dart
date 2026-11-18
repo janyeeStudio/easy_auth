@@ -30,6 +30,9 @@ class VerificationLoginForm extends StatefulWidget {
   /// 主题色
   final Color? primaryColor;
 
+  /// Optional account whose access code is supplied out of band for review.
+  final String? reviewAccessEmail;
+
   const VerificationLoginForm({
     super.key,
     required this.type,
@@ -42,6 +45,7 @@ class VerificationLoginForm extends StatefulWidget {
     this.loginButtonStyle,
     this.countdownSeconds = 60,
     this.primaryColor,
+    this.reviewAccessEmail,
   });
 
   @override
@@ -59,6 +63,14 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
   int _countdown = 0;
   Timer? _timer;
 
+  bool get _isReviewAccount {
+    final email = widget.reviewAccessEmail ?? EasyAuth().reviewAccessEmail;
+    return widget.type == VerificationType.email &&
+        email != null &&
+        _inputController.text.trim().toLowerCase() ==
+            email.trim().toLowerCase();
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
@@ -67,14 +79,9 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
     super.dispose();
   }
 
-  bool get _isReviewAccess =>
-      widget.type == VerificationType.email &&
-      _inputController.text.trim().toLowerCase() ==
-          EasyAuth().reviewAccessEmail;
-
   /// 发送验证码
   Future<void> _sendCode() async {
-    if (_countdown > 0 || _isReviewAccess) return;
+    if (_countdown > 0 || _isReviewAccount) return;
 
     final input = _inputController.text.trim();
     if (input.isEmpty) {
@@ -215,7 +222,9 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
           TextFormField(
             controller: _inputController,
             onChanged: (_) {
-              if (EasyAuth().reviewAccessEmail != null) setState(() {});
+              if ((widget.reviewAccessEmail ?? EasyAuth().reviewAccessEmail) !=
+                  null)
+                setState(() {});
             },
             decoration:
                 widget.inputDecoration ??
@@ -320,23 +329,22 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
                         ),
                         counterText: '',
                       ),
-                  keyboardType: _isReviewAccess
+                  keyboardType: _isReviewAccount
                       ? TextInputType.visiblePassword
                       : TextInputType.number,
-                  obscureText: _isReviewAccess,
+                  obscureText: _isReviewAccount,
                   autocorrect: false,
                   enableSuggestions: false,
-                  maxLength: _isReviewAccess ? 64 : 4,
+                  maxLength: _isReviewAccount ? 64 : 4,
                   validator: (value) {
                     if (value == null || value.isEmpty) {
                       return '请输入验证码';
                     }
-                    if (_isReviewAccess) {
-                      return RegExp(r'^[A-Za-z0-9_-]{32,64}$').hasMatch(value)
-                          ? null
-                          : '请输入完整审核访问码';
-                    }
-                    if (value.length != 4) {
+                    if (_isReviewAccount) {
+                      if (!RegExp(r'^[A-Za-z0-9_-]{32,64}$').hasMatch(value)) {
+                        return '请输入完整审核访问码';
+                      }
+                    } else if (!RegExp(r'^\d{4}$').hasMatch(value)) {
                       return '验证码为4位数字';
                     }
                     return null;
@@ -344,32 +352,31 @@ class _VerificationLoginFormState extends State<VerificationLoginForm> {
                 ),
               ),
               const SizedBox(width: 12),
-              SizedBox(
-                width: 110,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _isReviewAccess || _countdown > 0 || _loading
-                      ? null
-                      : _sendCode,
-                  style:
-                      widget.sendButtonStyle ??
-                      ElevatedButton.styleFrom(
-                        backgroundColor: primaryColor.withValues(alpha: 0.1),
-                        foregroundColor: primaryColor,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+              if (!_isReviewAccount)
+                SizedBox(
+                  width: 110,
+                  height: 56,
+                  child: ElevatedButton(
+                    onPressed: _countdown > 0 || _loading ? null : _sendCode,
+                    style:
+                        widget.sendButtonStyle ??
+                        ElevatedButton.styleFrom(
+                          backgroundColor: primaryColor.withValues(alpha: 0.1),
+                          foregroundColor: primaryColor,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
                         ),
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                      ),
-                  child: _countdown > 0
-                      ? Text(
-                          '$_countdown秒',
-                          style: const TextStyle(fontSize: 13),
-                        )
-                      : const Text('发送验证码', style: TextStyle(fontSize: 13)),
+                    child: _countdown > 0
+                        ? Text(
+                            '$_countdown秒',
+                            style: const TextStyle(fontSize: 13),
+                          )
+                        : const Text('发送验证码', style: TextStyle(fontSize: 13)),
+                  ),
                 ),
-              ),
             ],
           ),
 

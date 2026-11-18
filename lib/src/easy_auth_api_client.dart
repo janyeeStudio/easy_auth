@@ -87,7 +87,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [loginWithSMS] Status: ${response.statusCode}');
-    print('📥 [loginWithSMS] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
@@ -141,7 +140,6 @@ class EasyAuthApiClient {
   /// 需要先通过原生SDK获取authCode
   Future<LoginResult> loginWithWechat(String authCode) async {
     print('📤 [loginWithWechat] 一次性登录');
-    print('   AuthCode: ${authCode.substring(0, 10)}...');
 
     final response = await _client.post(
       Uri.parse('$baseUrl${EasyAuthApiPaths.directLogin}'),
@@ -155,7 +153,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [loginWithWechat] Status: ${response.statusCode}');
-    print('📥 [loginWithWechat] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
@@ -199,7 +196,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [loginWithApple] Status: ${response.statusCode}');
-    print('📥 [loginWithApple] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
@@ -240,7 +236,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [loginWithAppleWeb] Status: ${response.statusCode}');
-    print('📥 [loginWithAppleWeb] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
@@ -302,7 +297,6 @@ class EasyAuthApiClient {
     );
 
     print('📥 [loginWithGoogle] Status: ${response.statusCode}');
-    print('📥 [loginWithGoogle] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
