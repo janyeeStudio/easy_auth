@@ -110,9 +110,6 @@ class EasyAuthApiClient {
     required String email,
     required String code,
   }) async {
-    print('📤 [loginWithEmail] 一次性登录');
-    print('   Email: $email');
-
     final response = await _client.post(
       Uri.parse('$baseUrl${EasyAuthApiPaths.directLogin}'),
       headers: {'Content-Type': 'application/json'},
@@ -123,9 +120,6 @@ class EasyAuthApiClient {
         'channel_data': {'email': email, 'code': code},
       }),
     );
-
-    print('📥 [loginWithEmail] Status: ${response.statusCode}');
-    print('📥 [loginWithEmail] Response: ${response.body}');
 
     final data = _handleResponse(response);
 
@@ -417,7 +411,9 @@ class EasyAuthApiClient {
     required Map<String, dynamic> channelData,
   }) async {
     final response = await _client.post(
-      Uri.parse('$baseUrl${EasyAuthApiPaths.bindChannel}?token=${Uri.encodeComponent(token)}'),
+      Uri.parse(
+        '$baseUrl${EasyAuthApiPaths.bindChannel}?token=${Uri.encodeComponent(token)}',
+      ),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'tenant_id': tenantId,
@@ -431,14 +427,18 @@ class EasyAuthApiClient {
     print('📥 [bindChannel] Response: ${response.body}');
 
     final (status, body) = _rawJsonResponse(response);
-    _checkAccountState(status, body); // 401 + account_merged 等特殊错误抛 AccountStateException
+    _checkAccountState(
+      status,
+      body,
+    ); // 401 + account_merged 等特殊错误抛 AccountStateException
 
     // 200(ok/already_bound) 或 409(conflict),body 直接是 BindChannelV2Result 形态
     if (status == 200 || status == 409) {
       return BindResult.fromJson(body ?? {}, httpStatus: status);
     }
     // 其它都是真错误
-    final msg = body?['message'] as String? ?? body?['msg'] as String? ?? response.body;
+    final msg =
+        body?['message'] as String? ?? body?['msg'] as String? ?? response.body;
     return BindError(message: 'HTTP $status: $msg');
   }
 
@@ -466,7 +466,8 @@ class EasyAuthApiClient {
     if (status == 200) {
       return BindResult.fromJson(body ?? {}, httpStatus: status);
     }
-    final msg = body?['message'] as String? ?? body?['msg'] as String? ?? response.body;
+    final msg =
+        body?['message'] as String? ?? body?['msg'] as String? ?? response.body;
     return BindError(message: 'HTTP $status: $msg');
   }
 
@@ -481,9 +482,13 @@ class EasyAuthApiClient {
     required String token,
     required List<int> pngBytes,
   }) async {
-    final uri = Uri.parse('$baseUrl${EasyAuthApiPaths.updateAvatar}?token=${Uri.encodeComponent(token)}');
+    final uri = Uri.parse(
+      '$baseUrl${EasyAuthApiPaths.updateAvatar}?token=${Uri.encodeComponent(token)}',
+    );
     final req = http.MultipartRequest('POST', uri)
-      ..files.add(http.MultipartFile.fromBytes('file', pngBytes, filename: 'avatar.png'));
+      ..files.add(
+        http.MultipartFile.fromBytes('file', pngBytes, filename: 'avatar.png'),
+      );
     final streamed = await _client.send(req);
     final response = await http.Response.fromStream(streamed);
     final data = _handleResponse(response);
@@ -522,11 +527,15 @@ class EasyAuthApiClient {
   /// 列当前 user 的绑定渠道(channel_user_id 脱敏)
   Future<List<LinkedChannel>> myChannels(String token) async {
     final response = await _client.get(
-      Uri.parse('$baseUrl${EasyAuthApiPaths.myChannels}?token=${Uri.encodeComponent(token)}'),
+      Uri.parse(
+        '$baseUrl${EasyAuthApiPaths.myChannels}?token=${Uri.encodeComponent(token)}',
+      ),
       headers: {'Content-Type': 'application/json'},
     );
     final data = _handleResponseAsList(response);
-    return data.map((e) => LinkedChannel.fromJson(e as Map<String, dynamic>)).toList();
+    return data
+        .map((e) => LinkedChannel.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   /// _rawJsonResponse 不抛异常的 HTTP 解析,给 bind/resolve 用 — 它们要区分
@@ -534,7 +543,8 @@ class EasyAuthApiClient {
   (int, Map<String, dynamic>?) _rawJsonResponse(http.Response response) {
     Map<String, dynamic>? body;
     try {
-      body = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      body =
+          jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
     } catch (_) {
       body = null;
     }
@@ -558,9 +568,13 @@ class EasyAuthApiClient {
   List<dynamic> _handleResponseAsList(http.Response response) {
     Map<String, dynamic>? json;
     try {
-      json = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      json =
+          jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
     } catch (e) {
-      throw EasyAuthException('HTTP ${response.statusCode}: ${response.body}', statusCode: response.statusCode);
+      throw EasyAuthException(
+        'HTTP ${response.statusCode}: ${response.body}',
+        statusCode: response.statusCode,
+      );
     }
     _checkAccountState(response.statusCode, json);
     if (response.statusCode != 200) {
@@ -569,7 +583,10 @@ class EasyAuthApiClient {
     }
     final code = json['code'] as int?;
     if (code != 0 && code != 200) {
-      throw EasyAuthException(json['msg'] as String? ?? 'unknown', statusCode: code);
+      throw EasyAuthException(
+        json['msg'] as String? ?? 'unknown',
+        statusCode: code,
+      );
     }
     return (json['data'] as List<dynamic>?) ?? [];
   }

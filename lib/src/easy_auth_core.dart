@@ -65,6 +65,11 @@ class EasyAuth {
   factory EasyAuth() => _instance;
   EasyAuth._internal();
 
+  String? get reviewAccessEmail =>
+      _config?.tenantId == 'kiku_app' && _config?.sceneId == 'app_native'
+      ? 'app-review@kiku.test'
+      : null;
+
   /// 初始化EasyAuth
   Future<void> init(EasyAuthConfig config) async {
     _autoRefreshTimer?.cancel();
